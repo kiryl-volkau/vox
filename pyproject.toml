@@ -1,0 +1,117 @@
+[project]
+name = "voice-code"
+version = "0.1.0"
+description = "Windows push-to-talk voice interface for Claude Code: GPU Whisper STT plus a local OpenAI-compatible LLM in Docker, native Windows hotkey/mic/paste companion."
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = []
+
+[project.optional-dependencies]
+server = [
+    "fastapi>=0.141",
+    "uvicorn[standard]>=0.52",
+    "pydantic>=2.13",
+    "pydantic-settings>=2.15",
+    "python-multipart>=0.0.32",
+    "httpx>=0.28",
+    "pyyaml>=6.0.3",
+    "faster-whisper==1.2.1",
+    "ctranslate2==4.8.2",
+    "numpy>=2.5",
+]
+client = [
+    "httpx>=0.28",
+    "pyyaml>=6.0.3",
+    "numpy>=2.5",
+    "sounddevice>=0.5.6",
+    "pynput>=1.8.2",
+    'pywin32>=312; sys_platform == "win32"',
+    "pystray>=0.19.5",
+    "pillow>=12",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9",
+    "pytest-asyncio>=1.0",
+    "anyio",
+    "ruff>=0.16",
+    "mypy>=2.3",
+    "types-PyYAML>=6.0",
+    "httpx>=0.28",
+    'pyinstaller>=6.22; sys_platform == "win32"',
+]
+
+[project.scripts]
+voice-code-server = "voice_code_server.main:main"
+voice-code-client = "voice_code_client.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/voice_code_server", "src/voice_code_client"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "W",
+    "I",
+    "N",
+    "UP",
+    "B",
+    "C4",
+    "SIM",
+    "RUF",
+    "ANN",
+    "PTH",
+    "TID",
+    "RET",
+    "ARG",
+]
+# RUF001/2/3 flag Cyrillic as "ambiguous unicode"; Russian text is this project's domain data.
+ignore = ["ANN401", "RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ANN", "ARG", "S101"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+plugins = ["pydantic.mypy"]
+files = ["src", "tests"]
+warn_unused_ignores = true
+no_implicit_reexport = true
+
+[[tool.mypy.overrides]]
+module = [
+    "faster_whisper.*",
+    "ctranslate2.*",
+    "sounddevice.*",
+    "pynput.*",
+    "pystray.*",
+    "win32clipboard",
+    "win32con",
+    "win32api",
+    "win32gui",
+    "PIL.*",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+disallow_untyped_calls = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = ["integration: requires a running backend/GPU/network"]
+addopts = "-q -m 'not integration'"

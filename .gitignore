@@ -1,0 +1,58 @@
+# Secrets - never commit
+.env
+.env.*
+!.env.example
+
+# User-specific client config (config/client.example.yaml is committed)
+config/client.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+
+# Virtualenvs / uv
+.venv/
+venv/
+env/
+.uv/
+uv-cache/
+
+# Build artefacts
+build/
+dist/
+*.spec.bak
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.cache/
+
+# Audio captures and downloaded model weights
+*.wav
+models/
+
+# IDE
+.idea/workspace.xml
+.idea/shelf/
+.idea/httpRequests/
+.idea/tasks.xml
+.idea/usage.statistics.xml
+.idea/dictionaries/
+.vscode/
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Logs
+*.log
+logs/

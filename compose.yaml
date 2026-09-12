@@ -1,0 +1,74 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: voice-code-backend:latest
+    container_name: voice-code-backend
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      VOICE_CODE_HOST: "0.0.0.0"
+      VOICE_CODE_PORT: "8765"
+    # Loopback only: the Windows companion is the sole client, never expose this on the LAN.
+    ports:
+      - "127.0.0.1:8765:8765"
+    # Lets the container reach an LLM served on the Windows host (the default LLM_BASE_URL).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - hf-cache:/cache/huggingface
+      - ct2-cache:/cache/ctranslate2
+    deploy:
+      resources:
+        reservations:
+          devices:
+            # "gpus: all" is the shorthand for this block; the long form is kept so the
+            # capability list stays explicit.
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import json,sys,urllib.request;sys.exit(0 if json.load(urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=4)).get('status') == 'ready' else 1)"
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      # The first start downloads the Whisper weights before /health reports "ready".
+      start_period: 180s
+
+  # Optional in-stack LLM: docker compose --profile bundled-model up -d
+  # With this profile set LLM_BASE_URL=http://ollama:11434/v1 in .env, and pull the model once:
+  # docker compose exec ollama ollama pull qwen2.5:7b-instruct
+  ollama:
+    profiles: ["bundled-model"]
+    image: ollama/ollama:latest
+    container_name: voice-code-ollama
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+volumes:
+  hf-cache:
+  ct2-cache:
+  ollama-models:

@@ -1,0 +1,59 @@
+# voice-code Windows companion configuration.
+# Copy to config/client.yaml and edit. Every value below is the built-in default, so a missing
+# config file behaves exactly like this one. Unknown top-level keys are ignored.
+
+# Where the Docker backend is reachable. connect_timeout_seconds fails fast when the container is
+# down; timeout_seconds must cover STT + LLM for the longest recording you allow.
+server:
+  base_url: "http://127.0.0.1:8765"
+  connect_timeout_seconds: 3.0
+  timeout_seconds: 60.0
+
+# Microphone capture. input_device: null = system default, an integer = device index, a string =
+# first input device whose name contains it (case-insensitive); run `--list-devices` to see them.
+# sample_rate: null = the device's native rate (the server resamples to 16 kHz).
+# max_seconds is a hard cap: audio past it is dropped, what was captured is still sent.
+audio:
+  input_device: null
+  max_seconds: 120.0
+  sample_rate: null
+  channels: 1
+
+# Push-to-talk bindings: hold the combo to record, release the trigger key to send.
+# Each binding maps a mode name (a file in modes/) to "mod+mod+key". Modifiers: ctrl, alt, shift,
+# win. The modifier set must match exactly, so ctrl+alt+space does not fire for ctrl+alt+shift+space.
+# cancel is pressed alone while recording: it drops the audio and sends nothing.
+hotkeys:
+  bindings:
+    context: "ctrl+alt+space"
+    dictation: "ctrl+alt+d"
+    clean: "ctrl+alt+c"
+    task: "ctrl+alt+t"
+  cancel: "esc"
+
+# Delivery into the focused window. With enabled: false the result is only copied to the clipboard.
+# preserve_clipboard puts your previous clipboard text back restore_delay_ms after the paste.
+# only_if_target_window_unchanged: if focus moved away while the backend was working, the result is
+# copied instead of pasted, so text never lands in the wrong window.
+paste:
+  enabled: true
+  shortcut: "ctrl+v"
+  preserve_clipboard: true
+  only_if_target_window_unchanged: true
+  restore_delay_ms: 600
+  # true would press Enter right after pasting, submitting the prompt automatically.
+  # Deliberately off: the text is always left in the terminal for you to read and send yourself.
+  auto_submit: false
+
+# Small always-on-top status window (recording timer, progress, errors). It never takes focus.
+# position: "bottom-center" or "top-center". hide_delay_ms is how long the final state stays up.
+overlay:
+  enabled: true
+  position: "bottom-center"
+  hide_delay_ms: 1200
+
+# level: DEBUG, INFO, WARNING, ERROR.
+# log_text: true also writes transcripts and generated prompts to the log at DEBUG. Off by default.
+logging:
+  level: "INFO"
+  log_text: false

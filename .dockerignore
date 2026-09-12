@@ -1,0 +1,53 @@
+# Everything the GPU backend image does not need.
+# Note: README.md and src/voice_code_client/ are NOT excluded - the wheel build
+# declares both (project.readme, tool.hatch packages) and fails without them.
+
+.git/
+.gitignore
+.gitattributes
+.github/
+
+.venv/
+venv/
+env/
+.uv/
+uv-cache/
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.cache/
+
+tests/
+dist/
+build/
+models/
+*.wav
+*.log
+logs/
+
+.idea/
+.vscode/
+*.iml
+
+# Secrets are injected at run time by compose, never baked into a layer.
+.env
+.env.*
+
+# Windows-companion-only assets.
+config/client.yaml
+scripts/*.ps1
+scripts/*.bat
+
+docs/
+
+Thumbs.db
+desktop.ini
+.DS_Store

@@ -1,0 +1,85 @@
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+from typing import Literal
+from urllib.parse import urlsplit, urlunsplit
+
+from pydantic import Field, SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Runtime configuration for the voice-code backend.
+
+    Values come from the process environment and from a ``.env`` file in the working
+    directory, matched case-insensitively against the environment names below. Fields may
+    also be passed by field name, e.g. ``Settings(stt_model="tiny")``, which is what tests
+    and embedded callers use.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+        populate_by_name=True,
+    )
+
+    host: str = Field("0.0.0.0", validation_alias="VOICE_CODE_HOST")
+    port: int = Field(8765, validation_alias="VOICE_CODE_PORT")
+
+    stt_model: str = Field("turbo", validation_alias="STT_MODEL")
+    stt_language: str = Field("ru", validation_alias="STT_LANGUAGE")
+    stt_device: Literal["auto", "cuda", "cpu"] = Field("auto", validation_alias="STT_DEVICE")
+    stt_compute_type: str = Field("float16", validation_alias="STT_COMPUTE_TYPE")
+    stt_beam_size: int = Field(1, validation_alias="STT_BEAM_SIZE")
+    stt_vad_filter: bool = Field(True, validation_alias="STT_VAD_FILTER")
+    stt_glossary_hotwords: bool = Field(True, validation_alias="STT_GLOSSARY_HOTWORDS")
+
+    llm_base_url: str = Field(
+        "http://host.docker.internal:11434/v1", validation_alias="LLM_BASE_URL"
+    )
+    llm_model: str = Field("qwen2.5:7b-instruct", validation_alias="LLM_MODEL")
+    llm_api_key: SecretStr = Field(SecretStr("local"), validation_alias="LLM_API_KEY")
+    llm_timeout_seconds: float = Field(30.0, validation_alias="LLM_TIMEOUT_SECONDS")
+    llm_temperature: float = Field(0.1, validation_alias="LLM_TEMPERATURE")
+    llm_max_tokens: int = Field(1024, validation_alias="LLM_MAX_TOKENS")
+
+    processing_concurrency: int = Field(1, validation_alias="PROCESSING_CONCURRENCY")
+
+    log_level: str = Field("INFO", validation_alias="LOG_LEVEL")
+    log_text: bool = Field(False, validation_alias="LOG_TEXT")
+
+    modes_dir: Path = Field(Path("modes"), validation_alias="MODES_DIR")
+    glossary_path: Path = Field(Path("config/glossary.yaml"), validation_alias="GLOSSARY_PATH")
+
+    max_audio_bytes: int = Field(25_000_000, validation_alias="MAX_AUDIO_BYTES")
+    max_audio_seconds: float = Field(300.0, validation_alias="MAX_AUDIO_SECONDS")
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """Return the process-wide Settings, built once from the environment.
+
+    Cached: tests that mutate the environment must call ``get_settings.cache_clear()``.
+    """
+    return Settings()
+
+
+def redacted_base_url(url: str) -> str:
+    """Return ``url`` with any ``user:password@`` userinfo removed.
+
+    ``http://user:pass@host:11434/v1`` becomes ``http://host:11434/v1``. A URL without
+    userinfo, or one that cannot be parsed, is returned unchanged.
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    if "@" not in parts.netloc:
+        return url
+    host = parts.netloc.rpartition("@")[2]
+    if not host:
+        return url
+    return urlunsplit((parts.scheme, host, parts.path, parts.query, parts.fragment))

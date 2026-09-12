@@ -1,0 +1,87 @@
+# Project glossary: spoken form -> canonical engineering term.
+#
+# How it is used:
+#   * the canonical terms are joined and passed to Whisper as hotwords (initial_prompt), which
+#     biases recognition towards them;
+#   * the whole mapping is rendered as a vocabulary block and injected into the LLM prompt, so the
+#     model knows that "мембершип" heard in Russian speech means the identifier "membership".
+#
+# How it is NOT used: no blind string replacement is ever performed on the transcript. Nothing here
+# rewrites the user's words; these are hints only. Adding an entry can never corrupt a sentence that
+# happened to contain the same syllables.
+#
+# Keys are lowercase spoken forms as they come out of the recognizer; values are what should appear
+# in the final text.
+
+terms:
+  "джигвард": "Jigward"
+  "клауд код": "Claude Code"
+  "кодекс": "Codex"
+  "спринг": "Spring"
+  "спринг бут": "Spring Boot"
+  "спринг секьюрити": "Spring Security"
+  "градл": "Gradle"
+  "мавен": "Maven"
+  "постгрес": "Postgres"
+  "хибернейт": "Hibernate"
+  "джейпа": "JPA"
+  "ликвибейз": "Liquibase"
+  "флайвей": "Flyway"
+  "принципал": "principal"
+  "мембершип": "membership"
+  "репа": "repository"
+  "репозиторий": "repository"
+  "пул реквест": "PR"
+  "пулл реквест": "PR"
+  "контроллер": "controller"
+  "сервис": "service"
+  "энтити": "entity"
+  "дто": "DTO"
+  "миграция": "migration"
+  "индекс": "index"
+  "составной индекс": "composite index"
+  "форин ки": "foreign key"
+  "внешний ключ": "foreign key"
+  "апи": "API"
+  "эндпоинт": "endpoint"
+  "квери": "query"
+  "транзакция": "transaction"
+  "кэш": "cache"
+  "лукап": "lookup"
+  "пагинация": "pagination"
+  "зависимость": "dependency"
+  "дифф": "diff"
+  "бранч": "branch"
+  "ветка": "branch"
+  "коммит": "commit"
+  "мёрдж": "merge"
+  "ребейз": "rebase"
+  "тесты": "tests"
+  "юнит тест": "unit test"
+  "интеграционный тест": "integration test"
+  "мокито": "Mockito"
+  "джюнит": "JUnit"
+  "фича флаг": "feature flag"
+  "жира": "Jira"
+  "деплой": "deploy"
+  "роллбэк": "rollback"
+  "билд": "build"
+  "пайплайн": "pipeline"
+  "си ай": "CI"
+  "докер": "Docker"
+  "докер компоуз": "Docker Compose"
+  "кубер": "Kubernetes"
+  "редис": "Redis"
+  "кафка": "Kafka"
+  "логи": "logs"
+  "ретрай": "retry"
+  "таймаут": "timeout"
+  "рефакторинг": "refactoring"
+  "бэкенд": "backend"
+  "фронтенд": "frontend"
+  "джава": "Java"
+  "котлин": "Kotlin"
+  "питон": "Python"
+  "тайпскрипт": "TypeScript"
+  "реакт": "React"
+  "айдиа": "IntelliJ IDEA"
