@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     )
     llm_model: str = Field("qwen2.5:7b-instruct", validation_alias="LLM_MODEL")
     llm_api_key: SecretStr = Field(SecretStr("local"), validation_alias="LLM_API_KEY")
-    llm_timeout_seconds: float = Field(30.0, validation_alias="LLM_TIMEOUT_SECONDS")
+    llm_timeout_seconds: float = Field(120.0, validation_alias="LLM_TIMEOUT_SECONDS")
     llm_temperature: float = Field(0.1, validation_alias="LLM_TEMPERATURE")
     llm_max_tokens: int = Field(1024, validation_alias="LLM_MAX_TOKENS")
 

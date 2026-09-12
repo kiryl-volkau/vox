@@ -50,6 +50,12 @@ services:
     image: ollama/ollama:latest
     container_name: voice-code-ollama
     restart: unless-stopped
+    environment:
+      # Never evict the model. The default is 5 minutes idle, which for a push-to-talk tool
+      # means the first request after any pause pays a ~30s reload - long enough that the
+      # backend gives up, and Ollama then cancels the load, so it never gets warm.
+      # Whisper turbo (~1.5 GB) and an 8B Q4 model (~5 GB) coexist fine in 16 GB.
+      OLLAMA_KEEP_ALIVE: "-1"
     ports:
       - "127.0.0.1:11434:11434"
     volumes:

@@ -32,7 +32,7 @@ def test_the_defaults_match_the_documented_contract() -> None:
 
     assert config.server.base_url == "http://127.0.0.1:8765"
     assert config.server.connect_timeout_seconds == 3.0
-    assert config.server.timeout_seconds == 60.0
+    assert config.server.timeout_seconds == 180.0
     assert config.audio.input_device is None
     assert config.audio.max_seconds == 120.0
     assert config.audio.sample_rate is None
@@ -69,7 +69,7 @@ def test_a_partial_file_only_overrides_what_it_names(tmp_path: Path) -> None:
     config = load_config(path)
 
     assert config.server.base_url == "http://10.0.0.5:9000"
-    assert config.server.timeout_seconds == 60.0
+    assert config.server.timeout_seconds == 180.0
     assert config.paste.auto_submit is True
     assert config.paste.shortcut == "ctrl+v"
     assert config.audio == default_config().audio
@@ -216,3 +216,20 @@ def test_paste_shortcut_is_validated_by_the_layer_that_has_to_execute_it(
     else:
         with pytest.raises(ConfigError, match=r"paste.shortcut"):
             load_config(path)
+
+
+def test_the_client_waits_longer_than_the_backend_does_for_the_model() -> None:
+    """The client must outlast LLM_TIMEOUT_SECONDS, or it hangs up first.
+
+    Whoever gives up first closes the connection, and Ollama responds by cancelling an
+    in-progress model load - so a cold model never finishes loading and every attempt fails
+    the same way. The client giving up first also hides the backend's real error code.
+    """
+    from voice_code_server.config import Settings
+
+    client_budget = default_config().server.timeout_seconds
+    backend_budget = Settings().llm_timeout_seconds
+
+    assert client_budget > backend_budget, (
+        f"client timeout {client_budget}s must exceed backend LLM timeout {backend_budget}s"
+    )

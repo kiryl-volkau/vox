@@ -23,7 +23,7 @@ def test_defaults_match_the_documented_contract() -> None:
     assert settings.llm_base_url == "http://host.docker.internal:11434/v1"
     assert settings.llm_model == "qwen2.5:7b-instruct"
     assert settings.llm_api_key.get_secret_value() == "local"
-    assert settings.llm_timeout_seconds == 30.0
+    assert settings.llm_timeout_seconds == 120.0
     assert settings.llm_temperature == 0.1
     assert settings.llm_max_tokens == 1024
     assert settings.processing_concurrency == 1

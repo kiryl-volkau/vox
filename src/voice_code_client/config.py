@@ -32,7 +32,7 @@ class ServerConfig:
 
     base_url: str = "http://127.0.0.1:8765"
     connect_timeout_seconds: float = 3.0
-    timeout_seconds: float = 60.0
+    timeout_seconds: float = 180.0
 
 
 @dataclass(frozen=True, slots=True)

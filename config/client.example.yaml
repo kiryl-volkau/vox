@@ -3,11 +3,13 @@
 # config file behaves exactly like this one. Unknown top-level keys are ignored.
 
 # Where the Docker backend is reachable. connect_timeout_seconds fails fast when the container is
-# down; timeout_seconds must cover STT + LLM for the longest recording you allow.
+# down; timeout_seconds must cover STT + LLM for the longest recording you allow, and must
+# stay LONGER than the backend's LLM_TIMEOUT_SECONDS so the backend's own error reaches you
+# instead of the client hanging up first and cancelling the work.
 server:
   base_url: "http://127.0.0.1:8765"
   connect_timeout_seconds: 3.0
-  timeout_seconds: 60.0
+  timeout_seconds: 180.0
 
 # Microphone capture. input_device: null = system default, an integer = device index, a string =
 # first input device whose name contains it (case-insensitive); run `--list-devices` to see them.
