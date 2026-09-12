@@ -128,6 +128,7 @@ class VoiceCodeApp:
 
     def _stop_recording(self, mode: str) -> None:
         self._recording_mode = None
+        released_at = time.perf_counter()
         self._machine.processing_started()
         try:
             wav, seconds = self._recorder.stop()
@@ -145,7 +146,7 @@ class VoiceCodeApp:
         self._overlay.show("Transcribing...", style="info")
         threading.Thread(
             target=self._worker,
-            args=(wav, mode, seconds, self._job, self._target_hwnd),
+            args=(wav, mode, seconds, self._job, self._target_hwnd, released_at),
             name="voice-code-request",
             daemon=True,
         ).start()
@@ -158,12 +159,19 @@ class VoiceCodeApp:
         self._overlay.hide()
 
     def _worker(
-        self, wav: bytes, mode: str, seconds: float, job: int, target_hwnd: int | None
+        self,
+        wav: bytes,
+        mode: str,
+        seconds: float,
+        job: int,
+        target_hwnd: int | None,
+        released_at: float,
     ) -> None:
         try:
             result = self._request(wav, mode, seconds, job)
             if result is None:
                 return
+            answered_at = time.perf_counter()
             logger.info(
                 "request %s mode=%s audio=%.1fs server_ms=%s chars=%d",
                 result.request_id,
@@ -175,6 +183,16 @@ class VoiceCodeApp:
             if self._config.logging.log_text:
                 logger.debug("output for %s: %s", result.request_id, result.output)
             self._deliver(result.output, target_hwnd)
+            # The server cannot see the hotkey release or the paste, so the round trip and the
+            # paste are only measurable here; the server's own split comes back in server_ms.
+            logger.debug(
+                "latency %s: round_trip=%dms paste=%dms end_to_end=%dms server=%s",
+                result.request_id,
+                int((answered_at - released_at) * 1000),
+                int((time.perf_counter() - answered_at) * 1000),
+                int((time.perf_counter() - released_at) * 1000),
+                result.server_ms,
+            )
         except ClipboardError as exc:
             logger.warning("delivery failed: %s", exc)
             self._fail("Clipboard busy")

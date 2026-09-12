@@ -27,6 +27,31 @@ _STYLES: dict[str, tuple[str, str]] = {
 _DEFAULT_STYLE = "info"
 
 
+def _foreground_window() -> int | None:
+    try:
+        return int(ctypes.windll.user32.GetForegroundWindow()) or None
+    except Exception:
+        return None
+
+
+def _restore_foreground(hwnd: int | None) -> None:
+    """Hand the foreground back to ``hwnd`` if building the overlay took it away.
+
+    Best effort: Windows refuses SetForegroundWindow from a process that is not already
+    foreground, and the overlay works fine either way, so a failure is only logged.
+    """
+    if hwnd is None:
+        return
+    try:
+        user32 = ctypes.windll.user32
+        if int(user32.GetForegroundWindow()) == hwnd:
+            return
+        user32.SetForegroundWindow.argtypes = (ctypes.c_void_p,)
+        user32.SetForegroundWindow(ctypes.c_void_p(hwnd))
+    except Exception as exc:
+        logger.debug("could not hand the foreground back: %s", exc)
+
+
 class Overlay:
     """Small always-on-top status window that never takes keyboard focus.
 
@@ -54,6 +79,9 @@ class Overlay:
         if not self._config.enabled or self._root is not None:
             return
         background, foreground = _STYLES[_DEFAULT_STYLE]
+        # tk.Tk() maps its root window before withdraw() can hide it again, and Windows hands
+        # that flash the foreground. Remember who had it so it can be given straight back.
+        previous = _foreground_window()
         root = tk.Tk()
         root.withdraw()
         window = tk.Toplevel(root)
@@ -76,6 +104,7 @@ class Overlay:
         self._window = window
         self._label = label
         self._apply_no_activate()
+        _restore_foreground(previous)
         root.after(_PUMP_INTERVAL_MS, self._pump)
 
     def stop(self) -> None:
