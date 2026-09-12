@@ -481,3 +481,22 @@ def test_an_unknown_route_returns_the_error_body_shape(
     assert response.status_code == 404
     assert body["error"] == "not_found"
     assert response.headers["X-Request-ID"]
+
+
+def test_health_probes_the_llm_with_a_short_budget(
+    ready_state: ServerState, app_factory: AppFactory
+) -> None:
+    """A firewalled endpoint that black-holes packets must not stall /health.
+
+    Without a per-probe budget the probe inherits LLM_TIMEOUT_SECONDS (30s by default), which
+    is longer than the Docker healthcheck timeout and than start.ps1's poll interval.
+    """
+    client = TestClient(app_factory(ready_state))
+
+    client.get("/health")
+
+    llm = ready_state.llm
+    assert llm is not None
+    recorded = llm.check_timeouts  # type: ignore[attr-defined]
+    assert recorded, "the health route did not probe the LLM"
+    assert all(t is not None and t <= 5.0 for t in recorded), recorded

@@ -305,10 +305,12 @@ if ($running.Count -gt 0) {
         Stop-WithError "No Python interpreter in $RepoRoot\.venv. Run scripts\install-client.ps1 first."
     }
 
+    # Start-Process joins -ArgumentList with bare spaces and quotes nothing, so any path
+    # containing a space would reach the companion as several separate arguments.
     $clientArgs = @("-m", "voice_code_client.main")
     $clientConfig = Join-Path $RepoRoot "config\client.yaml"
     if (Test-Path -LiteralPath $clientConfig) {
-        $clientArgs += @("--config", $clientConfig)
+        $clientArgs += @("--config", ('"' + $clientConfig + '"'))
     }
 
     Start-Process -FilePath $interpreter -ArgumentList $clientArgs -WorkingDirectory $RepoRoot -WindowStyle Hidden

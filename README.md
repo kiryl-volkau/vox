@@ -567,12 +567,12 @@ in the low hundreds on CUDA, and several seconds on CPU.
 | `Backend timeout` | The request exceeded the client's `server.timeout_seconds` (60 s) or the backend's `LLM_TIMEOUT_SECONDS` (30 s). Usually a model too large for the GPU, so it is running partly on the CPU. See the VRAM note above. |
 | `stt.device` is `cpu` | CUDA was not usable at load time, so it fell back (and `float16` downgraded to `int8`). Re-run the `docker run --gpus all ... nvidia-smi` check, restart Docker Desktop, and make sure the backend image is the `-cudnn-` CUDA flavour - CTranslate2 4.8.2 needs cuDNN 9 at runtime, which the plain runtime image does not ship. |
 | `llm.ready` is `false` | The container cannot reach the model server. For a Windows-side Ollama, `OLLAMA_HOST=0.0.0.0` must be set *and Ollama restarted*; `LLM_BASE_URL` must use `host.docker.internal`, not `127.0.0.1` (inside the container that is the container itself). Test with the `urllib` one-liner above, and check the Windows firewall. |
-| Hotkey does nothing | (1) The companion is not running - look for the tray icon. (2) Something else owns the combo; try another. (3) **The target app is elevated.** Windows refuses synthetic input from a lower-integrity process, so if IntelliJ runs as Administrator the companion must be elevated too - run it as Administrator, or better, stop running the IDE elevated. (4) A malformed binding: the companion prints `hotkey error:` and exits with code 2. |
+| Hotkey does nothing | (1) The companion is not running - look for the tray icon. (2) Something else owns the combo; try another. (3) **The target app is elevated.** Windows refuses synthetic input from a lower-integrity process, so if IntelliJ runs as Administrator the companion must be elevated too - run it as Administrator, or better, stop running the IDE elevated. (4) A malformed binding: the companion prints `config error:` naming the offending key and exits with code 2. (5) An unsupported trigger key - only the keys listed under [Changing hotkeys](#changing-hotkeys) are recognised. |
 | Recording never stops | Only the trigger key's release stops it, and `audio.max_seconds` (120 s) caps it regardless. Press `Esc` to discard. |
 | `Microphone unavailable` / `Microphone error` | The device is missing, in use exclusively by another app (Zoom, Teams, OBS), or blocked. Check Settings -> Privacy & security -> Microphone -> "Let desktop apps access your microphone", then `uv run voice-code-client --list-devices` and pin `audio.input_device`. |
 | `No audio captured` | The stream opened but produced no frames - almost always the wrong input device, or a muted mic. |
 | Text pasted into the wrong window | Should not happen: with `paste.only_if_target_window_unchanged: true` the companion compares the foreground window against the one recorded when you started speaking and, if focus moved, copies instead of pasting and shows `Copied - focus changed` - press `Ctrl+V` yourself. If you disabled that check, this is why. The companion also waits (up to 1 s) for you to release `Ctrl+Alt` before pasting, so the target receives `Ctrl+V` and not `Ctrl+Alt+V`. |
-| Clipboard not restored, or `Clipboard busy` | The Windows clipboard is frequently locked by another process; `set_text` retries a few times. Restore happens `paste.restore_delay_ms` (600 ms) after the paste - copying something else within that window means yours wins and the restore is skipped. Failures to save or restore are logged and never fail the request. Set `paste.preserve_clipboard: false` to switch the behaviour off. |
+| Clipboard not restored, or `Clipboard busy` | The Windows clipboard is frequently locked by another process; `set_text` retries a few times. Restore happens `paste.restore_delay_ms` (600 ms) after the paste and is unconditional, so anything you copy inside that short window is overwritten by the restored text; lengthen or disable it if that bites. Failures to save or restore are logged and never fail the request. Set `paste.preserve_clipboard: false` to switch the behaviour off. |
 | Hotkeys stop working on a Russian layout | Handled: when a `KeyCode` has no ASCII `char` (as with Cyrillic), the key is derived from the virtual-key code, so `Ctrl+Alt+D` fires on the physical `D`/`В` key in either layout. If it still misbehaves, run with `logging.level: DEBUG` and check which key name the listener reports. |
 | Wrong words for English terms | Add the spoken form to `config/glossary.yaml` and rebuild the backend. |
 
@@ -670,8 +670,9 @@ compose services use `restart: unless-stopped`, so they come back with Docker De
 ```
 
 produces `dist\voice-code.exe` - a single file you can run without a Python install and point the
-startup shortcut at. It still reads `config/client.yaml` from the working directory (falling back
-to the repo copy), and it still needs the backend running.
+startup shortcut at. It reads `config/client.yaml` from the working directory, then from beside the `.exe`
+(so `dist\config\client.yaml` or a `config\` folder next to wherever you copy it works), and it
+still needs the backend running.
 
 The exe bundles only the companion: `httpx`, `pyyaml`, `numpy`, `sounddevice`, `pynput`, `pywin32`,
 `pystray`, `pillow`, `tkinter`. It deliberately **excludes** `faster-whisper`, `ctranslate2`, CUDA
@@ -697,7 +698,8 @@ voice-code/
 │  ├─ dictation.md               punctuation only
 │  ├─ clean.md                   short explicit request
 │  └─ task.md                    expanded task + open questions
-├─ scripts/                      install-client.ps1, start.ps1, stop.ps1, build-client.ps1
+├─ scripts/                      install-client.ps1, start.ps1, stop.ps1,
+│                               build-client.ps1, smoke-test.ps1
 ├─ src/
 │  ├─ voice_code_server/
 │  │  ├─ main.py                 create_app(), lifespan, uvicorn entry point
@@ -720,9 +722,9 @@ voice-code/
 │     ├─ overlay.py              tkinter status overlay that never takes focus
 │     └─ config.py               client.yaml loading and validation
 └─ tests/
-   ├─ unit/
-   ├─ integration/               marked "integration"; needs a running backend/GPU
-   └─ fixtures/
+   ├─ conftest.py                fakes and builders shared by the suite
+   ├─ unit/                      no GPU, microphone, network or Docker required
+   └─ integration/               marked "integration"; needs a running backend/GPU
 ```
 
 ---

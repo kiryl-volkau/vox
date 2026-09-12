@@ -128,6 +128,7 @@ class FakeLlm:
         self.delay_s = delay_s
         self.raises = raises
         self.check_result = check_result
+        self.check_timeouts: list[float | None] = []
         self.closed = False
         self.calls: list[tuple[str, str, float | None]] = []
 
@@ -139,7 +140,8 @@ class FakeLlm:
             raise self.raises
         return self.reply
 
-    async def check(self) -> tuple[bool, str | None]:
+    async def check(self, timeout_seconds: float | None = None) -> tuple[bool, str | None]:
+        self.check_timeouts.append(timeout_seconds)
         return self.check_result
 
     async def aclose(self) -> None:

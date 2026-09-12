@@ -172,3 +172,47 @@ def test_the_example_config_shipped_with_the_repository_loads(repo_root: Path) -
     assert config.server.base_url == "http://127.0.0.1:8765"
     assert config.overlay.position in {"bottom-center", "top-center"}
     assert config == default_config()
+
+
+@pytest.mark.parametrize("combo", ["ctrl+alt+pause", "ctrl+alt+ё", "ctrl+alt+scrolllock"])
+def test_a_trigger_key_the_listener_never_reports_is_refused(tmp_path: Path, combo: str) -> None:
+    """Hotkey.parse only checks the shape, so an unknown key used to load and never fire."""
+    path = tmp_path / "client.yaml"
+    path.write_text(f"hotkeys:\n  bindings:\n    context: {combo}\n", encoding="utf-8")
+
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(path)
+
+    assert "hotkeys.bindings.context" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("combo", ["ctrl+alt+space", "ctrl+space", "ctrl+alt+f13", "win+alt+0"])
+def test_supported_trigger_keys_are_accepted(tmp_path: Path, combo: str) -> None:
+    # ctrl+space is a deliberate allowance: it collides with IntelliJ completion, so it is not
+    # the default, but the user may still choose it.
+    path = tmp_path / "client.yaml"
+    path.write_text(f"hotkeys:\n  bindings:\n    context: {combo}\n", encoding="utf-8")
+
+    assert load_config(path).hotkeys.bindings["context"] == combo
+
+
+@pytest.mark.parametrize(
+    ("shortcut", "accepted"),
+    [("ctrl+v", True), ("shift+insert", True), ("ctrl+b", False), ("v", False)],
+)
+def test_paste_shortcut_is_validated_by_the_layer_that_has_to_execute_it(
+    tmp_path: Path, shortcut: str, accepted: bool
+) -> None:
+    """The hotkey grammar accepts chords SendInput cannot send.
+
+    Validating with it meant an unsupported shortcut was only discovered at delivery time,
+    once per request, after the transcription had already been produced.
+    """
+    path = tmp_path / "client.yaml"
+    path.write_text(f"paste:\n  shortcut: {shortcut}\n", encoding="utf-8")
+
+    if accepted:
+        assert load_config(path).paste.shortcut == shortcut
+    else:
+        with pytest.raises(ConfigError, match=r"paste.shortcut"):
+            load_config(path)

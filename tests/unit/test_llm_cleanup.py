@@ -79,3 +79,43 @@ def test_a_think_block_does_not_eat_the_answer() -> None:
     cleaned = clean_llm_output("<think>надо ли трогать тесты</think>Проверь тесты.")
 
     assert cleaned == "Проверь тесты."
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # A first line ending in ":" is only boilerplate when every word is filler. These read
+        # like announcements but carry real content, so they must survive intact.
+        (
+            "Response headers надо проверить так:\n- Content-Type",
+            "Response headers надо проверить так:\n- Content-Type",
+        ),
+        (
+            "Ответ сервиса надо проверить тут:\n- UserController",
+            "Ответ сервиса надо проверить тут:\n- UserController",
+        ),
+        # task mode emits this exact header; deleting it would silently drop the questions.
+        ("Открытые вопросы:\n- Нужен ли индекс?", "Открытые вопросы:\n- Нужен ли индекс?"),
+        ("Вот итоговый промпт:\nДобавь индекс.", "Добавь индекс."),
+        ("Here is your prompt:\nAdd the index.", "Add the index."),
+        ("Here’s the final prompt:\nAdd it.", "Add it."),
+    ],
+)
+def test_only_all_filler_lines_are_treated_as_a_preamble(raw: str, expected: str) -> None:
+    assert clean_llm_output(raw) == expected
+
+
+def test_a_reply_with_several_fenced_blocks_is_left_alone() -> None:
+    """Only a fence wrapping the WHOLE reply may be unwrapped.
+
+    Scanning backwards for the closing fence spliced the end of the first block to the start
+    of the last one, producing output with unbalanced markers.
+    """
+    raw = "```bash\ndocker compose up\n```\n\nЗатем:\n\n```bash\ndocker compose logs\n```"
+
+    assert clean_llm_output(raw) == raw
+
+
+def test_think_block_offsets_survive_characters_that_change_length_when_lowercased() -> None:
+    """U+0130 lowercases to two characters, so offsets taken from text.lower() shifted."""
+    assert clean_llm_output("<think>İİİ reasoning</think>Ответ здесь") == "Ответ здесь"

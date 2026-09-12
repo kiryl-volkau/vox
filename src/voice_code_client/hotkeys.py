@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import string
 from typing import TYPE_CHECKING, Any
 
 from .state import HotkeyStateMachine, Ignore
@@ -43,6 +44,9 @@ _NAMED_KEYS = frozenset(
         "right",
     }
 ) | frozenset(f"f{number}" for number in range(1, 25))
+#: Every trigger key normalize_key can produce. A binding naming anything else would be
+#: accepted by Hotkey.parse and then simply never fire, so config validation checks it.
+TRIGGER_KEYS = _NAMED_KEYS | frozenset(string.ascii_lowercase) | frozenset(string.digits)
 
 
 def normalize_key(key: object) -> str | None:
@@ -91,6 +95,9 @@ class HotkeyListener:
     reach the focused application. Every non-Ignore event the machine produces is passed
     to ``on_event`` on that listener thread; callback exceptions are logged and never
     propagated back into pynput, which would kill the listener.
+
+    Synthetic (injected) key events are ignored, so the companion never reacts to the
+    keystrokes it sends itself when pasting.
     """
 
     def __init__(self, machine: HotkeyStateMachine, on_event: Callable[[object], None]) -> None:
@@ -125,14 +132,21 @@ class HotkeyListener:
         except Exception:
             logger.exception("failed to stop the keyboard listener")
 
-    def _on_press(self, key: object) -> None:
-        self._dispatch(key, pressed=True)
+    def _on_press(self, key: object, injected: bool = False) -> None:
+        self._dispatch(key, pressed=True, injected=injected)
 
-    def _on_release(self, key: object) -> None:
-        self._dispatch(key, pressed=False)
+    def _on_release(self, key: object, injected: bool = False) -> None:
+        self._dispatch(key, pressed=False, injected=injected)
 
-    def _dispatch(self, key: object, *, pressed: bool) -> None:
+    def _dispatch(self, key: object, *, pressed: bool, injected: bool = False) -> None:
         try:
+            if injected:
+                # Our own paste is SendInput'd, and the low-level hook reports it back to us.
+                # Feeding that synthetic ctrl-up to the machine clears a ctrl the user is still
+                # physically holding, after which the chord no longer matches and push-to-talk
+                # goes dead until they let go of ctrl. pynput's win32 backend passes this flag;
+                # backends that do not simply leave it False.
+                return
             name = normalize_key(key)
             if name is None:
                 return

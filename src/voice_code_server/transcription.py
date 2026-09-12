@@ -21,6 +21,11 @@ logger = logging.getLogger(__name__)
 type FloatArray = NDArray[np.float32]
 
 DEFAULT_SAMPLE_RATE = 16000
+MAX_DECODED_SECONDS = 600.0
+# Bounds on the rate a WAV header may declare. The value drives the resample ratio, so an
+# absurd one turns a few hundred bytes into gigabytes of float32.
+MIN_SAMPLE_RATE = 4000
+MAX_SAMPLE_RATE = 768000
 
 _WAVE_FORMAT_PCM = 0x0001
 _WAVE_FORMAT_IEEE_FLOAT = 0x0003
@@ -142,8 +147,8 @@ def decode_wav(data: bytes) -> tuple[FloatArray, int]:
         audio_format = int.from_bytes(fmt_body[24:26], "little")
     if channels < 1:
         raise TranscriptionError("WAVE stream declares zero channels")
-    if sample_rate < 1:
-        raise TranscriptionError("WAVE stream declares a zero sample rate")
+    if not MIN_SAMPLE_RATE <= sample_rate <= MAX_SAMPLE_RATE:
+        raise TranscriptionError(f"WAVE stream declares an unusable sample rate: {sample_rate}")
 
     return _samples_to_float(data_body, audio_format, bits, channels), sample_rate
 
@@ -166,18 +171,25 @@ def resample_linear(audio: FloatArray, src_rate: int, dst_rate: int) -> FloatArr
     return np.interp(wanted, known, audio).astype(np.float32)
 
 
-def decode_audio(data: bytes, target_rate: int = DEFAULT_SAMPLE_RATE) -> tuple[FloatArray, float]:
+def decode_audio(
+    data: bytes,
+    target_rate: int = DEFAULT_SAMPLE_RATE,
+    max_seconds: float = MAX_DECODED_SECONDS,
+) -> tuple[FloatArray, float]:
     """Decode any supported audio payload to (float32 mono at ``target_rate``, seconds).
 
     RIFF/WAVE payloads are decoded by :func:`decode_wav` and resampled in-process; anything
     else is handed to the PyAV-backed decoder shipped with faster-whisper. Raises
-    TranscriptionError for an empty or undecodable payload.
+    TranscriptionError for an empty or undecodable payload, or for one whose decoded
+    length exceeds ``max_seconds``.
     """
     if not data:
         raise TranscriptionError("audio payload is empty")
 
     if len(data) >= 12 and data[0:4] == b"RIFF" and data[8:12] == b"WAVE":
         samples, sample_rate = decode_wav(data)
+        if samples.shape[0] / float(sample_rate) > max_seconds:
+            raise TranscriptionError(f"audio is longer than the {max_seconds:.0f}s limit")
         audio = resample_linear(samples, sample_rate, target_rate)
     else:
         try:
@@ -191,7 +203,10 @@ def decode_audio(data: bytes, target_rate: int = DEFAULT_SAMPLE_RATE) -> tuple[F
                 f"could not decode audio payload ({type(exc).__name__}: {exc})"
             ) from exc
 
-    return audio, audio.shape[0] / float(target_rate)
+    seconds = audio.shape[0] / float(target_rate)
+    if seconds > max_seconds:
+        raise TranscriptionError(f"audio is longer than the {max_seconds:.0f}s limit")
+    return audio, seconds
 
 
 class Transcriber:
@@ -306,7 +321,7 @@ class Transcriber:
         inference fails.
         """
         started = time.perf_counter()
-        audio, audio_seconds = decode_audio(data)
+        audio, audio_seconds = decode_audio(data, max_seconds=self._settings.max_audio_seconds)
         forced = language or self._settings.stt_language or None
         text, detected, probability = self._run(audio, forced)
         return TranscriptionResult(

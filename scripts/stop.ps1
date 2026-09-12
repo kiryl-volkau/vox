@@ -161,7 +161,9 @@ if ($Volumes) {
     }
 }
 
-$composeArgs = @("compose", "-f", $ComposeFile, "down")
+# The bundled-model profile must be named or 'down' leaves voice-code-ollama running and
+# never removes ollama-models, contradicting the confirmation prompt above.
+$composeArgs = @("compose", "-f", $ComposeFile, "--profile", "bundled-model", "down")
 if ($removeVolumes) {
     $composeArgs += "--volumes"
 }

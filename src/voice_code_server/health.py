@@ -42,7 +42,7 @@ class ServerState:
     warming: bool = True
 
 
-async def refresh_llm(state: ServerState) -> None:
+async def refresh_llm(state: ServerState, timeout_seconds: float | None = None) -> None:
     """Probe the LLM endpoint and update ``llm_ready``/``llm_error`` on ``state``.
 
     Never raises and never records the API key: ``OpenAICompatibleClient.check`` reports
@@ -53,9 +53,12 @@ async def refresh_llm(state: ServerState) -> None:
         state.llm_ready = False
         state.llm_error = "llm client not initialised"
         return
-    ready, reason = await llm.check()
+    ready, reason = await llm.check(timeout_seconds)
     state.llm_ready = ready
     state.llm_error = None if ready else (reason or "llm check failed")
+
+
+HEALTH_PROBE_TIMEOUT_S = 2.0
 
 
 async def build_health(state: ServerState) -> HealthResponse:
@@ -65,7 +68,10 @@ async def build_health(state: ServerState) -> HealthResponse:
     "ready" when STT is loaded and the LLM answers, and "degraded" otherwise. The reported
     LLM base URL has any credentials stripped; the API key is never included.
     """
-    await refresh_llm(state)
+    # A short budget on purpose: /health is polled by the Docker healthcheck and by
+    # start.ps1, and a firewalled endpoint that black-holes packets would otherwise stall
+    # every health response for the full LLM timeout.
+    await refresh_llm(state, HEALTH_PROBE_TIMEOUT_S)
     settings = state.settings
     transcriber = state.transcriber
     stt_ready = transcriber is not None and transcriber.ready

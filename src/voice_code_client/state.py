@@ -168,6 +168,11 @@ class HotkeyStateMachine:
             return CancelRecording(mode)
 
         if self._phase is not Phase.IDLE or name in self._blocked:
+            # Block a trigger pressed mid-flight, exactly as cancelling does. Otherwise the
+            # key is still down when processing ends and its next auto-repeat starts a
+            # recording the user never began, capturing only the tail of what they are saying.
+            if self._phase is not Phase.IDLE and self._is_trigger(name):
+                self._blocked.add(name)
             return Ignore()
 
         for mode, hotkey in self._bindings.items():
@@ -210,6 +215,9 @@ class HotkeyStateMachine:
         self._pressed.clear()
         self._blocked.clear()
         self._clear_active()
+
+    def _is_trigger(self, name: str) -> bool:
+        return any(hotkey.key == name for hotkey in self._bindings.values())
 
     def _matches_cancel(self, name: str) -> bool:
         if self._cancel is None or name != self._cancel.key:

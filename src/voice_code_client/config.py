@@ -7,6 +7,7 @@ built-in defaults block by block, so a user file only has to contain what it cha
 from __future__ import annotations
 
 import logging
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,6 +15,7 @@ from typing import Any
 
 import yaml
 
+from voice_code_client.hotkeys import TRIGGER_KEYS
 from voice_code_client.state import Hotkey
 
 MAX_RECORDING_SECONDS = 3600.0
@@ -110,13 +112,29 @@ def default_config() -> ClientConfig:
 def default_config_path() -> Path:
     """Return the path used when :func:`load_config` is called without one.
 
-    ``config/client.yaml`` relative to the current directory when it exists there, otherwise
-    relative to the repository root, so the companion finds it from any working directory.
+    ``config/client.yaml`` relative to the current directory when it exists there, then
+    beside the executable (the PyInstaller build), then the repository checkout, so the
+    companion finds its configuration from any working directory.
     """
     local = Path("config/client.yaml")
     if local.is_file():
         return local
+    for base in _config_search_roots():
+        candidate = base / "config" / "client.yaml"
+        if candidate.is_file():
+            return candidate
     return Path(__file__).resolve().parents[2] / "config" / "client.yaml"
+
+
+def _config_search_roots() -> list[Path]:
+    roots: list[Path] = []
+    if getattr(sys, "frozen", False):
+        # In a one-file build __file__ points inside the extraction directory under %TEMP%,
+        # so the repository-relative fallback cannot work; look beside the .exe instead.
+        executable = Path(sys.executable).resolve().parent
+        roots.extend((executable, executable.parent))
+    roots.append(Path(__file__).resolve().parents[2])
+    return roots
 
 
 def load_config(path: Path | None = None) -> ClientConfig:
@@ -249,6 +267,18 @@ def _audio(data: Mapping[str, Any], default: AudioConfig) -> AudioConfig:
     )
 
 
+def _check_trigger(where: str, key: str) -> None:
+    """Reject a trigger key the keyboard listener never reports.
+
+    Hotkey.parse only checks the shape of the combo, so a binding such as "ctrl+alt+pause"
+    would load cleanly and then silently never fire.
+    """
+    if key not in TRIGGER_KEYS:
+        raise ConfigError(
+            f"{where}: '{key}' is not a key the listener reports, so the binding would never fire"
+        )
+
+
 def _hotkeys(data: Mapping[str, Any], default: HotkeyConfig) -> HotkeyConfig:
     raw = data.get("bindings")
     if raw is None:
@@ -270,24 +300,31 @@ def _hotkeys(data: Mapping[str, Any], default: HotkeyConfig) -> HotkeyConfig:
         raise ConfigError("hotkeys.bindings: at least one mode must be bound")
     for mode, combo in bindings.items():
         try:
-            Hotkey.parse(combo)
+            parsed = Hotkey.parse(combo)
         except ValueError as exc:
             raise ConfigError(f"hotkeys.bindings.{mode}: {exc}") from exc
+        _check_trigger(f"hotkeys.bindings.{mode}", parsed.key)
 
     cancel = _read_str(data, "hotkeys", "cancel", default.cancel)
     try:
-        Hotkey.parse(cancel)
+        parsed_cancel = Hotkey.parse(cancel)
     except ValueError as exc:
         raise ConfigError(f"hotkeys.cancel: {exc}") from exc
+    _check_trigger("hotkeys.cancel", parsed_cancel.key)
 
     return HotkeyConfig(bindings=bindings, cancel=cancel)
 
 
 def _paste(data: Mapping[str, Any], default: PasteConfig) -> PasteConfig:
     shortcut = _read_str(data, "paste", "shortcut", default.shortcut)
+    # Validated with the paste layer's own parser, not the hotkey grammar: the hotkey grammar
+    # accepts chords such as "ctrl+b" that SendInput has no mapping for, which used to be
+    # discovered only at delivery time, once per failed request.
+    from voice_code_client.clipboard import ClipboardError, parse_shortcut
+
     try:
-        Hotkey.parse(shortcut)
-    except ValueError as exc:
+        parse_shortcut(shortcut)
+    except ClipboardError as exc:
         raise ConfigError(f"paste.shortcut: {exc}") from exc
     restore_delay_ms = _read_int(data, "paste", "restore_delay_ms", default.restore_delay_ms)
     if restore_delay_ms < 0:

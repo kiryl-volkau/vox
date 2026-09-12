@@ -7,6 +7,7 @@ import sys
 import tempfile
 import threading
 import time
+from contextlib import suppress
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
@@ -240,6 +241,9 @@ class VoiceCodeApp:
             self._overlay.hide()
             return
 
+        # Wait for the chord to be released BEFORE sampling the foreground window: the wait
+        # can take up to a second, and the user may switch windows during it.
+        self._await_modifier_release()
         current_hwnd = foreground_window()
         if (
             paste.only_if_target_window_unchanged
@@ -256,14 +260,23 @@ class VoiceCodeApp:
             self._overlay.hide()
             return
 
-        self._await_modifier_release()
-        with preserved_clipboard(paste.preserve_clipboard, paste.restore_delay_ms):
-            set_text(output)
-            send_paste(paste.shortcut)
-            if paste.auto_submit:
-                send_enter()
-            self._overlay.show("Ready", style="ok")
+        try:
+            with preserved_clipboard(paste.preserve_clipboard, paste.restore_delay_ms):
+                set_text(output)
+                send_paste(paste.shortcut)
+                if paste.auto_submit:
+                    send_enter()
+        except ClipboardError as exc:
+            # preserved_clipboard has already put the previous text back, which would leave the
+            # result neither pasted nor on the clipboard. Hand it back so nothing is lost.
+            logger.warning("paste failed, leaving the result on the clipboard: %s", exc)
+            with suppress(ClipboardError):
+                set_text(output)
+            self._overlay.show("Paste failed - copied", style="error")
             self._overlay.hide()
+            return
+        self._overlay.show("Ready", style="ok")
+        self._overlay.hide()
 
     def _fail(self, text: str) -> None:
         self._overlay.show(text, style="error")
@@ -457,11 +470,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"config error: {exc}", file=sys.stderr)
         return 2
     _configure_logging(config.logging)
-    try:
-        app = VoiceCodeApp(config, config_path=args.config or default_config_path())
-    except ValueError as exc:
-        print(f"hotkey error: {exc}", file=sys.stderr)
-        return 2
+    app = VoiceCodeApp(config, config_path=args.config or default_config_path())
     return app.run()
 
 

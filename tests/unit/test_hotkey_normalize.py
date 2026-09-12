@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from voice_code_client.hotkeys import normalize_key
+from voice_code_client.hotkeys import HotkeyListener, normalize_key
+from voice_code_client.state import Hotkey, HotkeyStateMachine, StartRecording
 
 
 class NamedKey:
@@ -109,3 +110,38 @@ def test_a_named_key_wins_over_a_character() -> None:
         vk = 68
 
     assert normalize_key(Both()) == "space"
+
+
+def _stub(name: str | None = None, char: str | None = None, vk: int | None = None) -> object:
+    return NamedKey(name) if name is not None else CharKey(char, vk)
+
+
+def test_injected_events_are_ignored_so_our_own_paste_does_not_break_the_chord() -> None:
+    """send_paste synthesises ctrl+v and the global hook reports it straight back.
+
+    Feeding that synthetic ctrl-up to the machine would clear a ctrl the user is still
+    physically holding, and every later chord would then fail to match.
+    """
+    machine = HotkeyStateMachine({"context": Hotkey.parse("ctrl+alt+space")}, Hotkey.parse("esc"))
+    events: list[object] = []
+    listener = HotkeyListener(machine, events.append)
+
+    listener._dispatch(_stub(name="ctrl"), pressed=True)
+    listener._dispatch(_stub(name="alt"), pressed=True)
+    listener._dispatch(_stub(name="space"), pressed=True)
+    listener._dispatch(_stub(name="space"), pressed=False)
+    machine.processing_started()
+
+    for name, pressed in (("ctrl", True), (None, True), (None, False), ("ctrl", False)):
+        stub = _stub(name=name) if name else _stub(char="v", vk=86)
+        listener._dispatch(stub, pressed=pressed, injected=True)
+
+    assert machine.held == frozenset({"ctrl", "alt"})
+
+    machine.processing_finished()
+    listener._dispatch(_stub(name="space"), pressed=True)
+
+    assert [e for e in events if isinstance(e, StartRecording)] == [
+        StartRecording("context"),
+        StartRecording("context"),
+    ]

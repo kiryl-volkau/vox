@@ -310,3 +310,25 @@ def test_recording_is_not_stopped_by_the_cancel_key_release() -> None:
 
     assert isinstance(machine.key_up("esc"), Ignore)
     assert machine.phase is Phase.IDLE
+
+
+def test_a_trigger_pressed_during_processing_cannot_auto_start_the_next_recording() -> None:
+    """Holding the trigger through PROCESSING must not open the recorder mid-sentence.
+
+    The press is ignored while busy, but the key is still physically down when the worker
+    finishes, so its next auto-repeat would otherwise fire StartRecording and capture only
+    the tail of what the user is saying.
+    """
+    machine = _machine()
+    assert _start(machine) == StartRecording("context")
+    assert machine.key_up("space") == StopRecording("context")
+    machine.processing_started()
+
+    assert isinstance(machine.key_down("space"), Ignore)
+    assert isinstance(machine.key_down("space"), Ignore)
+    machine.processing_finished()
+
+    assert isinstance(machine.key_down("space"), Ignore)
+
+    machine.key_up("space")
+    assert machine.key_down("space") == StartRecording("context")

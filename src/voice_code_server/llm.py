@@ -29,37 +29,80 @@ class LlmResponseError(LlmError):
 
 
 _THINK_OPEN = re.compile(r"^<think\b[^>]*>", re.IGNORECASE)
-_THINK_CLOSE = "</think>"
+_THINK_CLOSE_RE = re.compile(r"</think\s*>", re.IGNORECASE)
+_THINK_ANY_OPEN = re.compile(r"<think", re.IGNORECASE)
 _FENCE_INFO = re.compile(r"[A-Za-z0-9_+#.-]{0,24}")
-_PREAMBLE = re.compile(
-    r"^(?:"
-    r"here\s+is|here['\u2019]s|here\s+are|certainly|sure|of\s+course|okay|ok|"
-    r"result|output|answer|response|prompt|"
-    r"final\s+(?:prompt|answer|result|version|text)|"
-    r"вот|конечно|"
-    r"готово|готовый|"
-    r"итоговый|итог|"
-    r"результат|ответ"
-    r")\b",
-    re.IGNORECASE,
+_PREAMBLE_WORDS = frozenset(
+    [
+        "here",
+        "heres",
+        "s",
+        "is",
+        "are",
+        "the",
+        "a",
+        "your",
+        "my",
+        "final",
+        "finally",
+        "below",
+        "following",
+        "certainly",
+        "sure",
+        "of",
+        "course",
+        "okay",
+        "ok",
+        "done",
+        "result",
+        "results",
+        "output",
+        "answer",
+        "response",
+        "prompt",
+        "text",
+        "version",
+        "request",
+        "вот",
+        "это",
+        "итоговый",
+        "итоговая",
+        "итоговое",
+        "итог",
+        "итоги",
+        "готовый",
+        "готовая",
+        "готово",
+        "конечно",
+        "результат",
+        "ответ",
+        "промпт",
+        "текст",
+        "запрос",
+        "задача",
+        "ниже",
+        "финальный",
+        "вариант",
+    ]
 )
 _QUOTE_PAIRS = (('"', '"'), ("'", "'"), ("«", "»"))
 
 
 def _strip_think(text: str) -> str:
-    lowered = text.lower()
+    # Searched with a case-insensitive regex rather than text.lower(): lowercasing can
+    # change the length (U+0130 lowers to two characters), shifting every offset after it.
     opening = _THINK_OPEN.match(text)
     if opening is not None:
-        close = lowered.find(_THINK_CLOSE, opening.end())
-        if close == -1:
+        close = _THINK_CLOSE_RE.search(text, opening.end())
+        if close is None:
             return text[opening.end() :]
-        return text[close + len(_THINK_CLOSE) :]
+        return text[close.end() :]
     # Chat templates for reasoning models often pre-fill the opening tag, so the reply starts
     # mid-reasoning and only the closing tag reaches us.
-    if "<think" not in lowered:
-        close = lowered.find(_THINK_CLOSE)
-        if close != -1:
-            return text[close + len(_THINK_CLOSE) :]
+    if _THINK_ANY_OPEN.search(text) is None:
+        close = _THINK_CLOSE_RE.search(text)
+        if close is not None:
+            return text[close.end() :]
     return text
 
 
@@ -69,8 +112,10 @@ def _strip_fence(text: str) -> str:
     lines = text.split("\n")
     if _FENCE_INFO.fullmatch(lines[0][3:].strip()) is None:
         return text
+    # The closer is the FIRST bare fence after the opener. Scanning backwards picked the
+    # last one, which spliced two different blocks together in a multi-block reply.
     close = -1
-    for index in range(len(lines) - 1, 0, -1):
+    for index in range(1, len(lines)):
         if lines[index].strip() == "```":
             close = index
             break
@@ -86,7 +131,12 @@ def _strip_preamble(text: str) -> str:
     candidate = head.strip().lstrip("#*_ \t")
     if not candidate.rstrip("*_ \t").endswith(":"):
         return text
-    if _PREAMBLE.match(candidate) is None:
+    # Every word must be filler. Matching only the first word deleted real content, because
+    # "Вот", "Ответ" and "Response" also open genuine sentences - "Response headers надо
+    # проверить так:" is a line to keep, "Вот итоговый промпт:" is one to drop.
+    body = candidate.rstrip("*_ 	").rstrip(":")
+    words = re.findall(r"[^\W\d_]+", body, re.UNICODE)
+    if not words or any(word.lower() not in _PREAMBLE_WORDS for word in words):
         return text
     return tail if separator else ""
 
@@ -198,12 +248,20 @@ class OpenAICompatibleClient:
             return {}
         return {"Authorization": f"Bearer {self._api_key}"}
 
-    async def chat(self, system: str, user: str, *, temperature: float | None = None) -> str:
+    async def chat(
+        self,
+        system: str,
+        user: str,
+        *,
+        temperature: float | None = None,
+        timeout_seconds: float | None = None,
+    ) -> str:
         """Run one non-streaming chat completion and return the raw assistant content.
 
-        The system message is omitted when ``system`` is empty. ``temperature`` overrides the
-        configured default for this call only. The returned string is exactly what the model
-        produced - callers apply ``clean_llm_output`` themselves.
+        The system message is omitted when ``system`` is empty. ``temperature`` and
+        ``timeout_seconds`` override the configured defaults for this call only. The
+        returned string is exactly what the model produced - callers apply
+        ``clean_llm_output`` themselves.
 
         Raises LlmTimeoutError on timeout, LlmUnavailableError when the endpoint is
         unreachable, and LlmResponseError on a non-2xx status or an unusable payload.
@@ -219,12 +277,16 @@ class OpenAICompatibleClient:
             "max_tokens": self._max_tokens,
             "stream": False,
         }
+        budget = self._timeout_seconds if timeout_seconds is None else timeout_seconds
         try:
             response = await self._client.post(
-                f"{self._base_url}/chat/completions", json=payload, headers=self._headers()
+                f"{self._base_url}/chat/completions",
+                json=payload,
+                headers=self._headers(),
+                timeout=budget,
             )
         except httpx.TimeoutException as exc:
-            raise LlmTimeoutError(f"LLM did not respond within {self._timeout_seconds:g}s") from exc
+            raise LlmTimeoutError(f"LLM did not respond within {budget:g}s") from exc
         except httpx.RequestError as exc:
             raise LlmUnavailableError(
                 f"LLM at {redacted_base_url(self._base_url)} is unreachable"
@@ -237,15 +299,20 @@ class OpenAICompatibleClient:
             raise LlmResponseError("LLM returned a non-JSON response") from exc
         return _message_content(body)
 
-    async def check(self) -> tuple[bool, str | None]:
+    async def check(self, timeout_seconds: float | None = None) -> tuple[bool, str | None]:
         """Probe ``GET /models``. Returns (True, None) when reachable, else (False, reason).
 
+        ``timeout_seconds`` overrides the client timeout. /health passes a short one so a
+        black-holed endpoint cannot stall the health response for the full LLM timeout.
         Never raises; the reason is a short string safe to put in a health response.
         """
+        budget = self._timeout_seconds if timeout_seconds is None else timeout_seconds
         try:
-            response = await self._client.get(f"{self._base_url}/models", headers=self._headers())
+            response = await self._client.get(
+                f"{self._base_url}/models", headers=self._headers(), timeout=budget
+            )
         except httpx.TimeoutException:
-            return False, f"timeout after {self._timeout_seconds:g}s"
+            return False, f"timeout after {budget:g}s"
         except httpx.RequestError as exc:
             return False, f"unreachable ({type(exc).__name__})"
         except Exception as exc:

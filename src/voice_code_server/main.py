@@ -41,6 +41,9 @@ def configure_logging(level: str) -> None:
         logging.getLogger(noisy).setLevel(max(resolved, logging.WARNING))
 
 
+LLM_WARMUP_TIMEOUT_S = 180.0
+
+
 async def _warm_llm(llm: OpenAICompatibleClient) -> None:
     """Send one throwaway completion so the server has the weights resident.
 
@@ -50,7 +53,9 @@ async def _warm_llm(llm: OpenAICompatibleClient) -> None:
     """
     started = time.perf_counter()
     try:
-        await llm.chat("", "ping")
+        # A generous budget, not LLM_TIMEOUT_SECONDS: this call is what forces a multi-GB
+        # model off disk and into VRAM, which legitimately takes longer than any later request.
+        await llm.chat("", "ping", timeout_seconds=LLM_WARMUP_TIMEOUT_S)
     except Exception as exc:
         logger.warning(
             "llm warmup failed (%s: %s); first request may be slow", type(exc).__name__, exc
