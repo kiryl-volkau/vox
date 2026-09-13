@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from voice_code_client.config import ConfigError, default_config, load_config
+from vox_client.config import ConfigError, default_config, load_config
 
 EXPECTED_BINDINGS = {
     "context": "ctrl+alt+space",
@@ -225,7 +225,7 @@ def test_the_client_waits_longer_than_the_backend_does_for_the_model() -> None:
     in-progress model load - so a cold model never finishes loading and every attempt fails
     the same way. The client giving up first also hides the backend's real error code.
     """
-    from voice_code_server.config import Settings
+    from vox_server.config import Settings
 
     client_budget = default_config().server.timeout_seconds
     backend_budget = Settings().llm_timeout_seconds

@@ -6,11 +6,11 @@ from typing import Any
 
 import pytest
 
-from voice_code_server.config import Settings
-from voice_code_server.glossary import Glossary
-from voice_code_server.llm import LlmTimeoutError
-from voice_code_server.modes import Mode, ModeRegistry, UnknownModeError
-from voice_code_server.processor import (
+from vox_server.config import Settings
+from vox_server.glossary import Glossary
+from vox_server.llm import LlmTimeoutError
+from vox_server.modes import Mode, ModeRegistry, UnknownModeError
+from vox_server.processor import (
     EmptyOutputError,
     EmptyTranscriptError,
     Processor,

@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from voice_code_server.config import redacted_base_url
+from vox_server.config import redacted_base_url
 
 _log = logging.getLogger(__name__)
 

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Installs the voice-code Windows companion into the project virtual environment.
+    Installs the vox Windows companion into the project virtual environment.
 
 .DESCRIPTION
     Verifies the host is 64-bit Windows 10 or 11, locates the uv package manager,
@@ -65,7 +65,7 @@ function Invoke-Native {
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
-Write-Host "voice-code - Windows companion installer"
+Write-Host "vox - Windows companion installer"
 Write-Info "repository: $RepoRoot"
 
 Write-Step "Checking the host"

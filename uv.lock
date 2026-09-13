@@ -1238,7 +1238,7 @@ wheels = [
 ]
 
 [[package]]
-name = "voice-code"
+name = "vox"
 version = "0.1.0"
 source = { editable = "." }
 

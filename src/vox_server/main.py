@@ -156,7 +156,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     """Build the FastAPI application: routes, error handlers and the startup lifespan."""
-    app = FastAPI(title="voice-code", version=__version__, lifespan=lifespan)
+    app = FastAPI(title="vox", version=__version__, lifespan=lifespan)
     register_routes(app)
     register_exception_handlers(app)
     return app

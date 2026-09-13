@@ -7,12 +7,12 @@ from typing import Any
 
 import httpx
 
-from voice_code_client import __version__
-from voice_code_client.config import ServerConfig
+from vox_client import __version__
+from vox_client.config import ServerConfig
 
 logger = logging.getLogger(__name__)
 
-CLIENT_ID = "voice-code-windows"
+CLIENT_ID = "vox-windows"
 CLIENT_VERSION = __version__
 
 GENERIC_ERROR_MESSAGE = "Backend error"
@@ -81,7 +81,7 @@ class ProcessResult:
 
 
 class VoiceCodeClient:
-    """Blocking HTTP client for the voice-code backend.
+    """Blocking HTTP client for the vox backend.
 
     Every method raises :class:`ApiError` (or one of its subclasses) on failure and never
     lets an ``httpx`` exception escape. Instances are safe to share between threads.

@@ -4,8 +4,8 @@ import sys
 
 import pytest
 
-from voice_code_client import clipboard
-from voice_code_client.clipboard import (
+from vox_client import clipboard
+from vox_client.clipboard import (
     VK_CONTROL,
     VK_INSERT,
     VK_SHIFT,

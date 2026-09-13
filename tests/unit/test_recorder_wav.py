@@ -8,8 +8,8 @@ from typing import NamedTuple
 import numpy as np
 import pytest
 
-from voice_code_client.recorder import encode_wav
-from voice_code_server.transcription import decode_wav
+from vox_client.recorder import encode_wav
+from vox_server.transcription import decode_wav
 
 
 class Decoded(NamedTuple):

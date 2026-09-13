@@ -10,7 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Runtime configuration for the voice-code backend.
+    """Runtime configuration for the vox backend.
 
     Values come from the process environment and from a ``.env`` file in the working
     directory, matched case-insensitively against the environment names below. Fields may

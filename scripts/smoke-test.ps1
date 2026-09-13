@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Verifies that a running voice-code backend is healthy end to end.
+    Verifies that a running vox backend is healthy end to end.
 
 .DESCRIPTION
     Runs eight checks against the backend and prints PASS, FAIL or SKIP for each:
@@ -258,7 +258,7 @@ function Invoke-ProcessRequest {
 
 $BaseUrl = $BaseUrl.TrimEnd("/")
 
-Write-Host "voice-code - smoke test"
+Write-Host "vox - smoke test"
 Write-Host "    backend    : $BaseUrl"
 Write-Host "    powershell : $($PSVersionTable.PSVersion)"
 Write-Host ""
@@ -364,7 +364,7 @@ if ($noAudioResponse.StatusCode -eq 422 -or $noAudioResponse.StatusCode -eq 400)
     Write-Result -Name "g) POST /v1/process without audio is rejected" -Status "FAIL" -Detail $detail
 }
 
-$wavPath = Join-Path $env:TEMP ("voice-code-smoke-{0}.wav" -f ([Guid]::NewGuid().ToString("N")))
+$wavPath = Join-Path $env:TEMP ("vox-smoke-{0}.wav" -f ([Guid]::NewGuid().ToString("N")))
 try {
     New-ToneWav -Path $wavPath
     $wavSize = (Get-Item -LiteralPath $wavPath).Length

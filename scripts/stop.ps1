@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-    Stops the voice-code Windows companion and the Docker backend.
+    Stops the vox Windows companion and the Docker backend.
 
 .DESCRIPTION
     Terminates every companion process (any python.exe / pythonw.exe whose command
-    line mentions voice_code_client, plus a running voice-code.exe), then takes the
+    line mentions vox_client, plus a running vox.exe), then takes the
     compose stack down.
 
     The script works from any working directory: the repository root is resolved
@@ -85,15 +85,15 @@ function Invoke-Native {
 }
 
 function Get-CompanionProcess {
-    $filter = "Name = 'python.exe' OR Name = 'pythonw.exe' OR Name = 'voice-code.exe'"
+    $filter = "Name = 'python.exe' OR Name = 'pythonw.exe' OR Name = 'vox.exe'"
     $processes = @(Get-CimInstance -ClassName Win32_Process -Filter $filter -ErrorAction SilentlyContinue)
-    return @($processes | Where-Object { $_.Name -eq "voice-code.exe" -or $_.CommandLine -like "*voice_code_client*" })
+    return @($processes | Where-Object { $_.Name -eq "vox.exe" -or $_.CommandLine -like "*vox_client*" })
 }
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $ComposeFile = Join-Path $RepoRoot "compose.yaml"
 
-Write-Host "voice-code - stop"
+Write-Host "vox - stop"
 Write-Info "repository: $RepoRoot"
 
 Write-Step "Stopping the Windows companion"
@@ -161,7 +161,7 @@ if ($Volumes) {
     }
 }
 
-# The bundled-model profile must be named or 'down' leaves voice-code-ollama running and
+# The bundled-model profile must be named or 'down' leaves vox-ollama running and
 # never removes ollama-models, contradicting the confirmation prompt above.
 $composeArgs = @("compose", "-f", $ComposeFile, "--profile", "bundled-model", "down")
 if ($removeVolumes) {

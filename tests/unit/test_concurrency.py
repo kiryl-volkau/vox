@@ -8,10 +8,10 @@ from typing import Any
 
 import pytest
 
-from voice_code_server.config import Settings
-from voice_code_server.models import TranscriptionResult
-from voice_code_server.modes import Mode, ModeRegistry
-from voice_code_server.processor import Processor
+from vox_server.config import Settings
+from vox_server.models import TranscriptionResult
+from vox_server.modes import Mode, ModeRegistry
+from vox_server.processor import Processor
 
 AUDIO = b"audio-payload"
 STT_DELAY_S = 0.05

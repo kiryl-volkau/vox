@@ -1,4 +1,4 @@
-"""Shared fixtures and builders for the voice-code test suite.
+"""Shared fixtures and builders for the vox test suite.
 
 Everything here is offline: no microphone, GPU, network or Docker is ever touched. The
 fakes duck-type the real collaborators and are cast at the construction boundary, so the
@@ -20,15 +20,15 @@ from typing import Any, cast
 import pytest
 from fastapi import FastAPI
 
-from voice_code_server.api import register_exception_handlers, register_routes
-from voice_code_server.config import Settings, get_settings
-from voice_code_server.glossary import Glossary
-from voice_code_server.health import ServerState
-from voice_code_server.llm import OpenAICompatibleClient
-from voice_code_server.models import TranscriptionResult
-from voice_code_server.modes import Mode, ModeRegistry
-from voice_code_server.processor import Processor
-from voice_code_server.transcription import Transcriber
+from vox_server.api import register_exception_handlers, register_routes
+from vox_server.config import Settings, get_settings
+from vox_server.glossary import Glossary
+from vox_server.health import ServerState
+from vox_server.llm import OpenAICompatibleClient
+from vox_server.models import TranscriptionResult
+from vox_server.modes import Mode, ModeRegistry
+from vox_server.processor import Processor
+from vox_server.transcription import Transcriber
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 

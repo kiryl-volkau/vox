@@ -12,7 +12,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
-from voice_code_client.api_client import (
+from vox_client.api_client import (
     CLIENT_VERSION,
     ApiError,
     ApiTimeoutError,
@@ -20,7 +20,7 @@ from voice_code_client.api_client import (
     ProcessResult,
     VoiceCodeClient,
 )
-from voice_code_client.clipboard import (
+from vox_client.clipboard import (
     ClipboardError,
     foreground_window,
     preserved_clipboard,
@@ -28,17 +28,17 @@ from voice_code_client.clipboard import (
     send_paste,
     set_text,
 )
-from voice_code_client.config import (
+from vox_client.config import (
     ClientConfig,
     ConfigError,
     LoggingConfig,
     default_config_path,
     load_config,
 )
-from voice_code_client.hotkeys import HotkeyListener
-from voice_code_client.overlay import Overlay
-from voice_code_client.recorder import Recorder, RecorderError, list_input_devices
-from voice_code_client.state import (
+from vox_client.hotkeys import HotkeyListener
+from vox_client.overlay import Overlay
+from vox_client.recorder import Recorder, RecorderError, list_input_devices
+from vox_client.state import (
     CancelRecording,
     Hotkey,
     HotkeyStateMachine,
@@ -46,7 +46,7 @@ from voice_code_client.state import (
     StopRecording,
 )
 
-logger = logging.getLogger("voice_code_client")
+logger = logging.getLogger("vox_client")
 
 _TICK_MS = 200
 _FORMATTING_HINT_S = 0.9
@@ -84,9 +84,9 @@ class VoiceCodeApp:
         self._overlay.start()
         self._listener.start()
         self._start_tray()
-        threading.Thread(target=self._probe_backend, name="voice-code-health", daemon=True).start()
+        threading.Thread(target=self._probe_backend, name="vox-health", daemon=True).start()
         logger.info("listening for %s", self._bindings_summary())
-        self._overlay.show(f"voice-code ready - {self._bindings_summary()}", style="info")
+        self._overlay.show(f"vox ready - {self._bindings_summary()}", style="info")
         self._overlay.hide()
         try:
             if self._overlay.enabled:
@@ -148,7 +148,7 @@ class VoiceCodeApp:
         threading.Thread(
             target=self._worker,
             args=(wav, mode, seconds, self._job, self._target_hwnd, released_at),
-            name="voice-code-request",
+            name="vox-request",
             daemon=True,
         ).start()
 
@@ -331,9 +331,9 @@ class VoiceCodeApp:
             draw.rounded_rectangle((26, 16, 38, 38), radius=6, fill=(255, 255, 255, 255))
             draw.rectangle((21, 42, 43, 46), fill=(255, 255, 255, 255))
             icon = pystray.Icon(
-                "voice-code",
+                "vox",
                 image,
-                "voice-code",
+                "vox",
                 menu=pystray.Menu(
                     pystray.MenuItem("Status", self._tray_status),
                     pystray.MenuItem("Open config folder", self._tray_open_config),
@@ -344,7 +344,7 @@ class VoiceCodeApp:
             logger.warning("tray icon unavailable", exc_info=True)
             return
         self._tray = icon
-        threading.Thread(target=self._run_tray, name="voice-code-tray", daemon=True).start()
+        threading.Thread(target=self._run_tray, name="vox-tray", daemon=True).start()
 
     def _run_tray(self) -> None:
         try:
@@ -399,7 +399,7 @@ def _recording_text(mode: str, elapsed_s: float) -> str:
 def log_directory() -> Path:
     """Directory the companion writes its log file to (created on demand)."""
     base = os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()
-    return Path(base) / "voice-code"
+    return Path(base) / "vox"
 
 
 def _configure_logging(config: LoggingConfig) -> None:
@@ -446,21 +446,19 @@ def _print_devices() -> int:
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="voice-code-client",
-        description="Windows push-to-talk companion for the voice-code backend.",
+        prog="vox-client",
+        description="Windows push-to-talk companion for the vox backend.",
     )
     parser.add_argument("--config", type=Path, default=None, help="path to client.yaml")
     parser.add_argument(
         "--list-devices", action="store_true", help="print the audio input devices and exit"
     )
-    parser.add_argument(
-        "--version", action="version", version=f"voice-code-client {CLIENT_VERSION}"
-    )
+    parser.add_argument("--version", action="version", version=f"vox-client {CLIENT_VERSION}")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Entry point for the voice-code-client console script. Returns the process exit code."""
+    """Entry point for the vox-client console script. Returns the process exit code."""
     args = _parse_args(argv)
     if args.list_devices:
         return _print_devices()

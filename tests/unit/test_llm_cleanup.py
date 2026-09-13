@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from voice_code_server.llm import clean_llm_output
+from vox_server.llm import clean_llm_output
 
 FENCE = "```"
 

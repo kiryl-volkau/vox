@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from voice_code_server.config import Settings, get_settings, redacted_base_url
+from vox_server.config import Settings, get_settings, redacted_base_url
 
 
 def test_defaults_match_the_documented_contract() -> None:

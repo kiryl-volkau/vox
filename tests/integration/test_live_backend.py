@@ -12,8 +12,8 @@ from collections.abc import Callable, Iterator
 import httpx
 import pytest
 
-from voice_code_client.api_client import ApiError, VoiceCodeClient
-from voice_code_client.config import ServerConfig
+from vox_client.api_client import ApiError, VoiceCodeClient
+from vox_client.config import ServerConfig
 
 BASE_URL = os.environ.get("VOICE_CODE_E2E_URL", "http://127.0.0.1:8765")
 MODE = os.environ.get("VOICE_CODE_E2E_MODE", "dictation")

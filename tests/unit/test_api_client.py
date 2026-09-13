@@ -5,7 +5,7 @@ from collections.abc import Callable
 import httpx
 import pytest
 
-from voice_code_client.api_client import (
+from vox_client.api_client import (
     CLIENT_ID,
     ApiError,
     ApiTimeoutError,
@@ -14,7 +14,7 @@ from voice_code_client.api_client import (
     VoiceCodeClient,
     message_for_code,
 )
-from voice_code_client.config import ServerConfig
+from vox_client.config import ServerConfig
 
 WAV = b"RIFF0000WAVEfmt this-is-the-audio"
 

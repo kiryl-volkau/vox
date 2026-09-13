@@ -15,8 +15,8 @@ from typing import Any
 
 import yaml
 
-from voice_code_client.hotkeys import TRIGGER_KEYS
-from voice_code_client.state import Hotkey
+from vox_client.hotkeys import TRIGGER_KEYS
+from vox_client.state import Hotkey
 
 MAX_RECORDING_SECONDS = 3600.0
 OVERLAY_POSITIONS = frozenset({"bottom-center", "top-center"})
@@ -320,7 +320,7 @@ def _paste(data: Mapping[str, Any], default: PasteConfig) -> PasteConfig:
     # Validated with the paste layer's own parser, not the hotkey grammar: the hotkey grammar
     # accepts chords such as "ctrl+b" that SendInput has no mapping for, which used to be
     # discovered only at delivery time, once per failed request.
-    from voice_code_client.clipboard import ClipboardError, parse_shortcut
+    from vox_client.clipboard import ClipboardError, parse_shortcut
 
     try:
         parse_shortcut(shortcut)

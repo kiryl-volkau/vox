@@ -8,18 +8,18 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from voice_code_server.config import Settings
-from voice_code_server.health import ServerState
-from voice_code_server.llm import LlmResponseError, LlmTimeoutError, LlmUnavailableError
-from voice_code_server.models import (
+from vox_server.config import Settings
+from vox_server.health import ServerState
+from vox_server.llm import LlmResponseError, LlmTimeoutError, LlmUnavailableError
+from vox_server.models import (
     ProcessResponse,
     TimingsMs,
     TranscribeResponse,
     TransformResponse,
 )
-from voice_code_server.modes import ModeRegistry, UnknownModeError
-from voice_code_server.processor import EmptyOutputError, EmptyTranscriptError, Processor
-from voice_code_server.transcription import TranscriptionError
+from vox_server.modes import ModeRegistry, UnknownModeError
+from vox_server.processor import EmptyOutputError, EmptyTranscriptError, Processor
+from vox_server.transcription import TranscriptionError
 
 API_KEY = "sk-super-secret-key"
 WAV = b"RIFF----WAVEfmt "
@@ -229,7 +229,7 @@ def test_process_returns_the_documented_payload(
     response = client.post(
         "/v1/process",
         files=_upload(),
-        data={"mode": "context", "client_id": "voice-code-windows", "audio_seconds": "1.25"},
+        data={"mode": "context", "client_id": "vox-windows", "audio_seconds": "1.25"},
     )
     body = response.json()
 

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from voice_code_client.hotkeys import HotkeyListener, normalize_key
-from voice_code_client.state import Hotkey, HotkeyStateMachine, StartRecording
+from vox_client.hotkeys import HotkeyListener, normalize_key
+from vox_client.state import Hotkey, HotkeyStateMachine, StartRecording
 
 
 class NamedKey:

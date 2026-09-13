@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-    Builds the standalone voice-code.exe companion with PyInstaller.
+    Builds the standalone vox.exe companion with PyInstaller.
 
 .DESCRIPTION
     Runs PyInstaller through uv (uv run --extra client --group dev) to produce a
-    one-file, windowed executable named voice-code.exe in dist\.
+    one-file, windowed executable named vox.exe in dist\.
 
     The server stack (faster-whisper, CTranslate2, FastAPI, uvicorn, torch,
     transformers) is explicitly excluded, so the executable never carries the
@@ -78,7 +78,7 @@ function Invoke-Native {
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
-Write-Host "voice-code - companion executable build"
+Write-Host "vox - companion executable build"
 Write-Info "repository: $RepoRoot"
 
 Write-Step "Locating uv"
@@ -106,14 +106,14 @@ if (-not $uv) {
 }
 Write-Info "uv: $uv"
 
-$entryPoint = Join-Path $RepoRoot "src\voice_code_client\main.py"
+$entryPoint = Join-Path $RepoRoot "src\vox_client\main.py"
 $exampleConfig = Join-Path $RepoRoot "config\client.example.yaml"
 $distDir = Join-Path $RepoRoot "dist"
 $specDir = Join-Path $RepoRoot "build"
 # --clean empties the workpath before PyInstaller executes the generated spec file, so the
 # spec must live outside it.
 $workDir = Join-Path $specDir "pyinstaller"
-$exePath = Join-Path $distDir "voice-code.exe"
+$exePath = Join-Path $distDir "vox.exe"
 
 if (-not (Test-Path -LiteralPath $entryPoint)) {
     Stop-WithError "$entryPoint is missing. The repository checkout is incomplete."
@@ -144,7 +144,7 @@ $pyinstallerArgs = @(
     "--noconfirm",
     "--onefile",
     "--noconsole",
-    "--name", "voice-code",
+    "--name", "vox",
     "--distpath", $distDir,
     "--workpath", $workDir,
     "--specpath", $specDir,

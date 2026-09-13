@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 import pytest
 
-from voice_code_server.llm import (
+from vox_server.llm import (
     LlmResponseError,
     LlmTimeoutError,
     LlmUnavailableError,

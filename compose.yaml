@@ -1,10 +1,13 @@
+# Pinned so container and volume names do not change if the checkout directory is renamed.
+name: vox
+
 services:
   backend:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    image: voice-code-backend:latest
-    container_name: voice-code-backend
+    image: vox-backend:latest
+    container_name: vox-backend
     restart: unless-stopped
     env_file:
       - path: .env
@@ -48,7 +51,7 @@ services:
   ollama:
     profiles: ["bundled-model"]
     image: ollama/ollama:latest
-    container_name: voice-code-ollama
+    container_name: vox-ollama
     restart: unless-stopped
     environment:
       # Never evict the model. The default is 5 minutes idle, which for a push-to-talk tool

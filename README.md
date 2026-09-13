@@ -1,4 +1,4 @@
-# voice-code
+# vox
 
 Push-to-talk voice input for Claude Code on Windows 11.
 
@@ -33,7 +33,7 @@ disk.
                            |  Ctrl+V  (Enter is NEVER sent)
                            |
   +------------------------|---------+           +--------------------------------+
-  | voice-code companion (native)    |           | voice-code-backend             |
+  | vox companion (native)    |           | vox-backend             |
   |                                  |           |                                |
   |  1. global hotkey   (pynput)     |           |  FastAPI on 0.0.0.0:8765       |
   |         |                        | multipart |    |                           |
@@ -59,7 +59,7 @@ disk.
 
    (b) the bundled compose profile
        docker compose --profile bundled-model up -d
-       LLM_BASE_URL=http://ollama:11434/v1  -----------> container "voice-code-ollama"
+       LLM_BASE_URL=http://ollama:11434/v1  -----------> container "vox-ollama"
 ```
 
 ### Why the companion is not in Docker
@@ -260,7 +260,7 @@ By hand that is:
 
 ```powershell
 docker compose up -d
-uv run voice-code-client
+uv run vox-client
 ```
 
 To shut everything down:
@@ -481,7 +481,7 @@ docker compose up -d --build backend
 ### Choosing a different microphone
 
 ```powershell
-uv run voice-code-client --list-devices
+uv run vox-client --list-devices
 ```
 
 prints `index  name  (rate Hz)`. Put either the index or a distinctive substring of the name into
@@ -569,7 +569,7 @@ in the low hundreds on CUDA, and several seconds on CPU.
 | `llm.ready` is `false` | The container cannot reach the model server. For a Windows-side Ollama, `OLLAMA_HOST=0.0.0.0` must be set *and Ollama restarted*; `LLM_BASE_URL` must use `host.docker.internal`, not `127.0.0.1` (inside the container that is the container itself). Test with the `urllib` one-liner above, and check the Windows firewall. |
 | Hotkey does nothing | (1) The companion is not running - look for the tray icon. (2) Something else owns the combo; try another. (3) **The target app is elevated.** Windows refuses synthetic input from a lower-integrity process, so if IntelliJ runs as Administrator the companion must be elevated too - run it as Administrator, or better, stop running the IDE elevated. (4) A malformed binding: the companion prints `config error:` naming the offending key and exits with code 2. (5) An unsupported trigger key - only the keys listed under [Changing hotkeys](#changing-hotkeys) are recognised. |
 | Recording never stops | Only the trigger key's release stops it, and `audio.max_seconds` (120 s) caps it regardless. Press `Esc` to discard. |
-| `Microphone unavailable` / `Microphone error` | The device is missing, in use exclusively by another app (Zoom, Teams, OBS), or blocked. Check Settings -> Privacy & security -> Microphone -> "Let desktop apps access your microphone", then `uv run voice-code-client --list-devices` and pin `audio.input_device`. |
+| `Microphone unavailable` / `Microphone error` | The device is missing, in use exclusively by another app (Zoom, Teams, OBS), or blocked. Check Settings -> Privacy & security -> Microphone -> "Let desktop apps access your microphone", then `uv run vox-client --list-devices` and pin `audio.input_device`. |
 | `No audio captured` | The stream opened but produced no frames - almost always the wrong input device, or a muted mic. |
 | Text pasted into the wrong window | Should not happen: with `paste.only_if_target_window_unchanged: true` the companion compares the foreground window against the one recorded when you started speaking and, if focus moved, copies instead of pasting and shows `Copied - focus changed` - press `Ctrl+V` yourself. If you disabled that check, this is why. The companion also waits (up to 1 s) for you to release `Ctrl+Alt` before pasting, so the target receives `Ctrl+V` and not `Ctrl+Alt+V`. |
 | Clipboard not restored, or `Clipboard busy` | The Windows clipboard is frequently locked by another process; `set_text` retries a few times. Restore happens `paste.restore_delay_ms` (600 ms) after the paste and is unconditional, so anything you copy inside that short window is overwritten by the restored text; lengthen or disable it if that bites. Failures to save or restore are logged and never fail the request. Set `paste.preserve_clipboard: false` to switch the behaviour off. |
@@ -651,10 +651,10 @@ Build the exe (see below), then:
 ```powershell
 $startup  = [Environment]::GetFolderPath("Startup")
 $shell    = New-Object -ComObject WScript.Shell
-$lnk      = $shell.CreateShortcut((Join-Path $startup "voice-code.lnk"))
-$lnk.TargetPath       = (Resolve-Path .\dist\voice-code.exe).Path
+$lnk      = $shell.CreateShortcut((Join-Path $startup "vox.lnk"))
+$lnk.TargetPath       = (Resolve-Path .\dist\vox.exe).Path
 $lnk.WorkingDirectory = (Get-Location).Path
-$lnk.Description      = "voice-code push-to-talk companion"
+$lnk.Description      = "vox push-to-talk companion"
 $lnk.Save()
 ```
 
@@ -669,7 +669,7 @@ compose services use `restart: unless-stopped`, so they come back with Docker De
 .\scripts\build-client.ps1
 ```
 
-produces `dist\voice-code.exe` - a single file you can run without a Python install and point the
+produces `dist\vox.exe` - a single file you can run without a Python install and point the
 startup shortcut at. It reads `config/client.yaml` from the working directory, then from beside the `.exe`
 (so `dist\config\client.yaml` or a `config\` folder next to wherever you copy it works), and it
 still needs the backend running.
@@ -684,7 +684,7 @@ a binary that never calls them.
 ## Project layout
 
 ```
-voice-code/
+vox/
 ├─ compose.yaml                  backend service, GPU reservation, optional bundled-model profile
 ├─ docker/Dockerfile             CUDA 12.8.1 + cuDNN runtime, uv-installed Python 3.14
 ├─ pyproject.toml                deps (server / client extras), ruff, mypy, pytest config
@@ -701,7 +701,7 @@ voice-code/
 ├─ scripts/                      install-client.ps1, start.ps1, stop.ps1,
 │                               build-client.ps1, smoke-test.ps1
 ├─ src/
-│  ├─ voice_code_server/
+│  ├─ vox_server/
 │  │  ├─ main.py                 create_app(), lifespan, uvicorn entry point
 │  │  ├─ api.py                  routes, error mapping, request ids
 │  │  ├─ config.py               pydantic-settings, env vars
@@ -712,7 +712,7 @@ voice-code/
 │  │  ├─ llm.py                  OpenAI-compatible client, output cleanup
 │  │  ├─ processor.py            STT -> mode -> LLM -> wrapper pipeline
 │  │  └─ health.py               server state and /health assembly
-│  └─ voice_code_client/
+│  └─ vox_client/
 │     ├─ main.py                 wiring, delivery, tray, CLI
 │     ├─ state.py                hotkey parsing and the push-to-talk state machine (pure logic)
 │     ├─ hotkeys.py              pynput adapter, layout-independent key normalisation

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Starts the voice-code Docker backend and the Windows companion.
+    Starts the vox Docker backend and the Windows companion.
 
 .DESCRIPTION
     The daily one-command path:
@@ -117,9 +117,9 @@ function Format-Field {
 }
 
 function Get-CompanionProcess {
-    $filter = "Name = 'python.exe' OR Name = 'pythonw.exe' OR Name = 'voice-code.exe'"
+    $filter = "Name = 'python.exe' OR Name = 'pythonw.exe' OR Name = 'vox.exe'"
     $processes = @(Get-CimInstance -ClassName Win32_Process -Filter $filter -ErrorAction SilentlyContinue)
-    return @($processes | Where-Object { $_.Name -eq "voice-code.exe" -or $_.CommandLine -like "*voice_code_client*" })
+    return @($processes | Where-Object { $_.Name -eq "vox.exe" -or $_.CommandLine -like "*vox_client*" })
 }
 
 # Minimal reader for the "hotkeys:" block of the client YAML. Printing the bindings is
@@ -165,7 +165,7 @@ $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $ComposeFile = Join-Path $RepoRoot "compose.yaml"
 $HealthUrl = "http://127.0.0.1:8765/health"
 
-Write-Host "voice-code - start"
+Write-Host "vox - start"
 Write-Info "repository: $RepoRoot"
 
 if (-not (Test-Path -LiteralPath $ComposeFile)) {
@@ -201,9 +201,9 @@ Write-Step "Starting the backend"
 
 $needsBuild = $Build.IsPresent
 if (-not $needsBuild) {
-    $imageExit = Invoke-Native -FilePath $docker.Source -Quiet -Arguments @("image", "inspect", "voice-code-backend:latest")
+    $imageExit = Invoke-Native -FilePath $docker.Source -Quiet -Arguments @("image", "inspect", "vox-backend:latest")
     if ($imageExit -ne 0) {
-        Write-Info "image voice-code-backend:latest not found - building it (the first build takes a few minutes)."
+        Write-Info "image vox-backend:latest not found - building it (the first build takes a few minutes)."
         $needsBuild = $true
     }
 }
@@ -307,7 +307,7 @@ if ($running.Count -gt 0) {
 
     # Start-Process joins -ArgumentList with bare spaces and quotes nothing, so any path
     # containing a space would reach the companion as several separate arguments.
-    $clientArgs = @("-m", "voice_code_client.main")
+    $clientArgs = @("-m", "vox_client.main")
     $clientConfig = Join-Path $RepoRoot "config\client.yaml"
     if (Test-Path -LiteralPath $clientConfig) {
         $clientArgs += @("--config", ('"' + $clientConfig + '"'))
@@ -321,7 +321,7 @@ if ($running.Count -gt 0) {
         $runningPids = ($running | ForEach-Object { $_.ProcessId }) -join ", "
         Write-Info "companion started with $(Split-Path -Leaf $interpreter) (PID $runningPids)"
     } else {
-        Write-Warn "The companion exited immediately. Run it in a console to see why: $RepoRoot\.venv\Scripts\python.exe -m voice_code_client.main"
+        Write-Warn "The companion exited immediately. Run it in a console to see why: $RepoRoot\.venv\Scripts\python.exe -m vox_client.main"
     }
 }
 

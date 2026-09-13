@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from voice_code_client.state import (
+from vox_client.state import (
     CancelRecording,
     Hotkey,
     HotkeyStateMachine,

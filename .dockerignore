@@ -1,5 +1,5 @@
 # Everything the GPU backend image does not need.
-# Note: README.md and src/voice_code_client/ are NOT excluded - the wheel build
+# Note: README.md and src/vox_client/ are NOT excluded - the wheel build
 # declares both (project.readme, tool.hatch packages) and fails without them.
 
 .git/

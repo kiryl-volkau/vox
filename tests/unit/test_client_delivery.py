@@ -8,9 +8,9 @@ from typing import Any
 
 import pytest
 
-from voice_code_client import main as client_main
-from voice_code_client.clipboard import ClipboardError
-from voice_code_client.config import default_config
+from vox_client import main as client_main
+from vox_client.clipboard import ClipboardError
+from vox_client.config import default_config
 
 
 class _Spy:
@@ -45,8 +45,8 @@ def spy(monkeypatch: pytest.MonkeyPatch) -> _Spy:
     for name in ("set_text", "send_paste", "send_enter", "foreground_window"):
         monkeypatch.setattr(client_main, name, getattr(spy, name))
     # preserved_clipboard lives in the clipboard module and calls its own get/set.
-    monkeypatch.setattr("voice_code_client.clipboard.get_text", spy.get_text)
-    monkeypatch.setattr("voice_code_client.clipboard.set_text", spy.set_text)
+    monkeypatch.setattr("vox_client.clipboard.get_text", spy.get_text)
+    monkeypatch.setattr("vox_client.clipboard.set_text", spy.set_text)
     return spy
 
 

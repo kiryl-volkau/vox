@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from voice_code_server.glossary import Glossary
+from vox_server.glossary import Glossary
 
 _TOP_LEVEL_YAML = """\
 "джигвард": "Jigward"

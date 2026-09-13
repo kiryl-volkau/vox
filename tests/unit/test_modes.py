@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from voice_code_server.modes import Mode, ModeError, ModeRegistry, UnknownModeError
+from vox_server.modes import Mode, ModeError, ModeRegistry, UnknownModeError
 
 EXPECTED_MODES = ("clean", "context", "dictation", "task")
 

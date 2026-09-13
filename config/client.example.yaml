@@ -1,4 +1,4 @@
-# voice-code Windows companion configuration.
+# vox Windows companion configuration.
 # Copy to config/client.yaml and edit. Every value below is the built-in default, so a missing
 # config file behaves exactly like this one. Unknown top-level keys are ignored.
 

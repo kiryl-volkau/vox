@@ -6,7 +6,7 @@ import queue
 import tkinter as tk
 from collections.abc import Callable
 
-from voice_code_client.config import OverlayConfig
+from vox_client.config import OverlayConfig
 
 logger = logging.getLogger(__name__)
 

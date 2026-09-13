@@ -45,4 +45,4 @@ EXPOSE 8765
 HEALTHCHECK --interval=10s --timeout=5s --start-period=180s --retries=30 \
     CMD ["python", "-c", "import json,sys,urllib.request;sys.exit(0 if json.load(urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=4)).get('status') == 'ready' else 1)"]
 
-CMD ["python", "-m", "voice_code_server.main"]
+CMD ["python", "-m", "vox_server.main"]

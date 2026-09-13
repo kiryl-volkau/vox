@@ -8,7 +8,7 @@ from collections.abc import Callable
 import numpy as np
 import pytest
 
-from voice_code_server.transcription import (
+from vox_server.transcription import (
     TranscriptionError,
     decode_audio,
     decode_wav,
