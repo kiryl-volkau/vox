@@ -276,6 +276,9 @@ def build_test_app(state: ServerState | None = None) -> FastAPI:
 def _pristine_settings_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     for name in _SERVER_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
+    # Settings reads the repository's own .env, so without this a developer who has customised
+    # it - enabling tracing, pointing at a different model - sees unrelated unit tests fail.
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
