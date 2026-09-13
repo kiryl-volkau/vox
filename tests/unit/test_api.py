@@ -42,6 +42,8 @@ class FakeProcessor:
 
     ``projects`` records the project text every project-aware route forwarded, one entry per
     call, so a route that forwards nothing is distinguishable from one that forwards "".
+    ``provenance`` records the (project_name, client_id, client_version, audio_seconds) the
+    route reported about its caller.
     """
 
     def __init__(self, *, output: str = "Проверь membership.", raises: Exception | None = None):
@@ -49,6 +51,7 @@ class FakeProcessor:
         self.raises = raises
         self.calls: list[tuple[bytes, str, str]] = []
         self.projects: list[str] = []
+        self.provenance: list[tuple[str | None, str | None, str | None, float | None]] = []
 
     async def process(
         self,
@@ -58,10 +61,15 @@ class FakeProcessor:
         request_id: str,
         language: str | None = None,
         project: str = "",
+        project_name: str | None = None,
+        client_id: str | None = None,
+        client_version: str | None = None,
+        audio_seconds: float | None = None,
     ) -> ProcessResponse:
         del language
         self.calls.append((audio, mode_name, request_id))
         self.projects.append(project)
+        self.provenance.append((project_name, client_id, client_version, audio_seconds))
         if self.raises is not None:
             raise self.raises
         return ProcessResponse(
@@ -549,6 +557,40 @@ def test_process_accepts_the_project_form_fields(
 
     assert response.status_code == 200
     assert processor.projects == [PROJECT]
+
+
+def test_process_forwards_what_the_caller_said_about_itself(
+    ready_state: ServerState, app_factory: AppFactory
+) -> None:
+    """Provenance is recorded, not acted on; the processor needs it for the log and the trace."""
+    processor = FakeProcessor()
+    client = TestClient(app_factory(_with_processor(ready_state, processor)))
+
+    client.post(
+        "/v1/process",
+        files=_upload(),
+        data={
+            "mode": "context",
+            "project": PROJECT,
+            "project_name": "jigward",
+            "client_id": "vox-idea",
+            "client_version": "0.1.0",
+            "audio_seconds": "1.25",
+        },
+    )
+
+    assert processor.provenance == [("jigward", "vox-idea", "0.1.0", 1.25)]
+
+
+def test_process_reports_an_anonymous_caller_as_nothing_at_all(
+    ready_state: ServerState, app_factory: AppFactory
+) -> None:
+    processor = FakeProcessor()
+    client = TestClient(app_factory(_with_processor(ready_state, processor)))
+
+    client.post("/v1/process", files=_upload(), data={"mode": "context"})
+
+    assert processor.provenance == [(None, None, None, None)]
 
 
 def test_process_works_without_any_project(

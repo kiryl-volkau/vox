@@ -70,6 +70,10 @@ project:
   max_bytes: 8000
 
 # level: DEBUG, INFO, WARNING, ERROR.
+# At INFO the companion logs one provenance line per recording: the mode, the project it
+# resolved, the .vox.md it read, how many bytes of it were sent, whether they were truncated,
+# why nothing was sent when nothing was (project_status), and the target window handle. The
+# window TITLE is logged only at DEBUG, because it usually names the file you had open.
 # log_text: true also writes transcripts and generated prompts to the log at DEBUG. Off by default.
 logging:
   level: "INFO"

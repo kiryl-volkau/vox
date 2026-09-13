@@ -26,6 +26,9 @@ class OverlapRecordingTranscriber:
         self._active = 0
         self.max_overlap = 0
         self.total_calls = 0
+        self.model_name = "fake-whisper"
+        self.device = "cpu"
+        self.compute_type = "int8"
 
     def transcribe(self, data: bytes, language: str | None = None) -> TranscriptionResult:
         del data, language

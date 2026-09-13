@@ -218,7 +218,16 @@ async def process_audio(
         audio_seconds,
     )
     _log_project(request_id, project_name, project, state.settings)
-    return await processor.process(data, mode, request_id=request_id, project=project)
+    return await processor.process(
+        data,
+        mode,
+        request_id=request_id,
+        project=project,
+        project_name=project_name,
+        client_id=client_id,
+        client_version=client_version,
+        audio_seconds=audio_seconds,
+    )
 
 
 @router.post("/v1/transcribe")

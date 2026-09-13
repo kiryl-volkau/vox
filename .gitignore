@@ -39,6 +39,9 @@ htmlcov/
 *.wav
 models/
 
+# Diagnostic traces (VOX_TRACE_DIR): whole transcripts and prompts, never commit them
+/traces/
+
 # IDE
 .idea/workspace.xml
 .idea/shelf/

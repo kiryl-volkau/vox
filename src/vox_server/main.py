@@ -19,6 +19,7 @@ from .health import ServerState, refresh_llm
 from .llm import OpenAICompatibleClient
 from .modes import ModeRegistry
 from .processor import Processor
+from .trace import TraceWriter
 from .transcription import Transcriber
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,23 @@ async def _warm_llm(llm: OpenAICompatibleClient) -> None:
     logger.info("llm warm in %d ms", int((time.perf_counter() - started) * 1000))
 
 
+def build_trace_writer(settings: Settings) -> TraceWriter | None:
+    """Return the request-trace writer, or None when ``trace_dir`` is unset.
+
+    Logs one INFO line when tracing is on and nothing when it is off: the files hold
+    transcripts, prompts and model output, so the startup log has to say so out loud.
+    """
+    if settings.trace_dir is None:
+        return None
+    logger.info(
+        "request tracing is ON: the newest %d traces go to %s, "
+        "each holding the transcript, the prompts and the model output",
+        settings.trace_keep,
+        settings.trace_dir,
+    )
+    return TraceWriter(settings.trace_dir, settings.trace_keep)
+
+
 async def _warm_up(
     state: ServerState,
     transcriber: Transcriber,
@@ -73,6 +91,7 @@ async def _warm_up(
     modes: ModeRegistry,
     glossary: Glossary,
     settings: Settings,
+    trace_writer: TraceWriter | None,
 ) -> None:
     """Load STT and probe the LLM, then publish the processor and clear the warming flag.
 
@@ -103,7 +122,7 @@ async def _warm_up(
     if state.llm_ready:
         await _warm_llm(llm)
 
-    state.processor = Processor(transcriber, llm, modes, glossary, settings)
+    state.processor = Processor(transcriber, llm, modes, glossary, settings, trace_writer)
     state.warming = False
 
 
@@ -144,7 +163,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Loading Whisper takes tens of seconds (minutes on a cold model cache). Warming in the
     # background lets /health answer "warming" straight away instead of refusing connections,
     # which is what the companion and start.ps1 report progress from.
-    warmup_task = asyncio.create_task(_warm_up(state, transcriber, llm, modes, glossary, settings))
+    trace_writer = build_trace_writer(settings)
+    warmup_task = asyncio.create_task(
+        _warm_up(state, transcriber, llm, modes, glossary, settings, trace_writer)
+    )
     logger.info("listening on %s:%d (warming up in the background)", settings.host, settings.port)
     try:
         yield
@@ -200,6 +222,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="include transcripts and output in DEBUG logs",
     )
+    parser.add_argument(
+        "--trace-dir",
+        type=Path,
+        help="write a JSON trace of every request here; off unless set, and the files "
+        "contain transcripts, prompts and model output",
+    )
+    parser.add_argument("--trace-keep", type=int, help="trace files to keep (default 200)")
     parser.add_argument("--version", action="version", version=f"vox-server {__version__}")
     return parser
 

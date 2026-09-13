@@ -653,7 +653,8 @@ built in `modes.py`, not in the mode files, so every mode behaves identically - 
 sees the text.
 
 Project text is never logged at `INFO`. The backend logs only the project name and the byte count;
-the text itself appears at `DEBUG`, and only with `LOG_TEXT=true`.
+the text itself appears at `DEBUG`, and only with `LOG_TEXT=true`. The one thing that puts it on
+disk is [tracing](#tracing-a-request), which is off unless you switch it on.
 
 ---
 
@@ -828,6 +829,8 @@ not an override, so the container keeps working on environment variables alone.
 | `--processing-concurrency` | `PROCESSING_CONCURRENCY` | `1` |
 | `--log-level` | `LOG_LEVEL` | `INFO` |
 | `--log-text` / `--no-log-text` | `LOG_TEXT` | off |
+| `--trace-dir` | `VOX_TRACE_DIR` | unset - [tracing](#tracing-a-request) is off |
+| `--trace-keep` | `VOX_TRACE_KEEP` | `200` |
 
 `--version` prints the version and exits, and `--help` lists the same options. The remaining
 settings stay environment-only, because they are set once and never per launch: `STT_VAD_FILTER`,
@@ -899,6 +902,157 @@ in the low hundreds on CUDA, and several seconds on CPU.
 
 ---
 
+## Tracing a request
+
+The one log line per request says how long each stage took and nothing about what was in them. When
+the text that comes back is wrong, that is not enough. Tracing fills it in after the fact: with it
+on, the backend writes one JSON file per request holding the whole provenance of that request -
+what Whisper heard, which `.vox.md` arrived and how much of it survived, the exact system and user
+prompts that were assembled, what the model returned raw, whether the output cleanup changed it,
+the final text, and the timings of each stage. Dictate once, open the trace, and read what happened
+instead of guessing at it.
+
+**It is off by default, and it stays off until you ask for it.** This is the only part of vox that
+puts transcripts and prompts on disk - everything else holds them in memory and drops them (see
+[Privacy](#privacy)). A trace file contains what you dictated, verbatim, along with your project
+context, the whole prompt and the model's answer. Switch it on while you are chasing something,
+then switch it back off and delete the files.
+
+### Switching it on
+
+Add to `.env` in the repo root:
+
+```dotenv
+VOX_TRACE_DIR=/traces
+VOX_TRACE_KEEP=200
+```
+
+and restart the backend so it picks them up:
+
+```powershell
+docker compose up -d
+```
+
+`compose.yaml` already mounts the repository's own `traces` directory into the container at
+`/traces`, so the files land in `<repo>\traces\` on Windows, and `/traces/` is gitignored. Tracing
+is on exactly when `VOX_TRACE_DIR` is set - there is no second switch - and the startup log says so
+out loud, in one line:
+
+```
+request tracing is ON: the newest 200 traces go to /traces, each holding the transcript, the prompts and the model output
+```
+
+With it off, nothing about tracing is logged at all. A [native run](#running-the-backend-natively)
+takes `--trace-dir` and `--trace-keep` instead of the environment variables.
+
+To switch it off again, delete the `VOX_TRACE_DIR` line from `.env` (or comment it out), restart,
+and remove what was already written:
+
+```powershell
+docker compose up -d
+Remove-Item -Recurse -Force .\traces
+```
+
+Switching tracing off stops new files; it does not delete the ones already on disk. That second
+command is the part people forget.
+
+### Reading one
+
+```powershell
+.\scripts\show-trace.ps1                              # the newest request, long text cut short
+.\scripts\show-trace.ps1 -Full                        # the same, every prompt and transcript in full
+.\scripts\show-trace.ps1 -List                        # a table of the last 20 requests
+.\scripts\show-trace.ps1 -Last 5                      # the last five reports (with -List, five rows)
+.\scripts\show-trace.ps1 -RequestId 3f9a1c07 -Full    # one request; a unique prefix is enough
+```
+
+`-List` prints time, request id, mode, project, status and total ms - enough to find the request you
+mean. The id is also in the backend log line for that request and in the response's `X-Request-ID`
+header. `-TraceDir` points the script at a directory other than `traces`. With nothing to show it
+prints how to switch tracing on and exits 0; an unknown request id exits 1. A file that is not
+readable JSON is skipped with a warning rather than killing the run.
+
+The files are plain JSON, written UTF-8 without escapes and indented, so opening one in an editor
+works just as well - Russian reads as Russian.
+
+### What is in a trace
+
+The name is the UTC timestamp followed by the request id, so sorting by name sorts by time:
+
+```
+traces\20260912-142233-518-3f9a1c07b2d4.json
+```
+
+Trimmed, with the long text cut - a real file carries all of it:
+
+```json
+{
+  "request_id": "3f9a1c07b2d4",
+  "started_at": "2026-09-12T14:22:33.518291+00:00",
+  "endpoint": "process",
+  "mode": "clean",
+  "status": "ok",
+  "error": null,
+  "client": { "id": "vox-idea", "version": "0.1.0", "audio_seconds": 6.4 },
+  "audio": { "bytes": 205856, "decoded_seconds": 6.43 },
+  "stt": {
+    "model": "turbo", "device": "cuda", "compute_type": "float16",
+    "language": "ru", "language_probability": 1.0, "duration_ms": 374,
+    "transcript": "посмотри этот сервис тут мембершип почему-то второй раз достается"
+  },
+  "project": {
+    "name": "Jigward", "received_bytes": 1840, "used_bytes": 1840,
+    "truncated": false, "text": "# Jigward\n\n## Термины\n..."
+  },
+  "glossary": { "entries": 71, "prompt_block_chars": 1786 },
+  "prompt": {
+    "system_chars": 2274, "user_chars": 1902,
+    "system": "Ты редактор ... ## Контекст проекта\n# Jigward\n...",
+    "user": "## Словарь\n... ## Текст\nпосмотри этот сервис тут мембершип ..."
+  },
+  "llm": {
+    "model": "qwen2.5:7b-instruct",
+    "base_url": "http://host.docker.internal:11434/v1",
+    "temperature": 0.1, "duration_ms": 902,
+    "raw_output": "```\nПроверь, зачем в текущем сервисе membership загружается второй раз.\n```",
+    "cleaned_output": "Проверь, зачем в текущем сервисе membership загружается второй раз.",
+    "cleanup_changed": true
+  },
+  "output": {
+    "wrapped_for_claude": false, "chars": 67,
+    "text": "Проверь, зачем в текущем сервисе membership загружается второй раз."
+  },
+  "timings_ms": { "transcription": 380, "llm": 910, "total": 1298 }
+}
+```
+
+| What you want to know | Where to look |
+|---|---|
+| Did Whisper mishear me? | `stt.transcript` - the exact text that went on to the model, before any mode touched it. `stt.language` with `language_probability`, and `audio.decoded_seconds` against `client.audio_seconds`, say whether it heard the right language and the whole recording. |
+| Did my `.vox.md` get picked up? | `project.name` and `project.used_bytes`. A `null` name means the request carried no project context at all - the client decided that, and its own log says why. `truncated: true` means the file was over `MAX_PROJECT_BYTES` (8000) and the tail was dropped. `project.text` is the context the model actually saw, not the file on disk. |
+| Did the cleanup eat my text? | `llm.cleanup_changed`. When it is `true`, read `llm.raw_output` against `llm.cleaned_output`: the cleanup strips code fences, quoting and model preamble, and this is where you see it taking a bite it should not have. |
+| Why did the model answer *that*? | `prompt.system` and `prompt.user`, verbatim and complete - the mode's instructions plus the project context in the system prompt, the glossary and your transcript in the user message, transcript last. `llm.model` and `llm.temperature` say who answered and how loosely. |
+| Why was it slow? | `timings_ms` - `transcription` against `llm` says which half to blame. A slow first half with `stt.device: "cpu"` is the CUDA fallback; a slow `llm` half is usually a model too big for the GPU (see the VRAM note above). `stt.duration_ms` and `llm.duration_ms` are the stages themselves, the `timings_ms` pair the wall clock around them. |
+| What was actually delivered? | `output.text` - what the plugin typed or the companion pasted - and `output.wrapped_for_claude` for whether the mode's wrapper was applied on top of `llm.cleaned_output`. |
+| It failed - on what? | `status` is `"error"`, and `error.type` / `error.message` name the exception. Failed requests are traced too, with every stage that completed before the failure filled in, which is usually the point. |
+
+Sections that do not apply to a request are `null` rather than empty: `audio` and `stt` for
+`/v1/transform`, `project` for `/v1/transcribe`, and `prompt`, `glossary` and `llm` for anything
+that never reached the model. `LLM_API_KEY` never appears in a trace, and `llm.base_url` has any
+`user:password@` stripped out of it.
+
+### Retention
+
+`VOX_TRACE_KEEP` (200 by default) is how many files are kept. After each write the directory is
+pruned to the newest that many, so it cannot grow without bound; at least one file is always kept,
+whatever you set. Nothing rotates and nothing is compressed - pruning only deletes the oldest.
+
+A trace that cannot be written never costs you a request: the backend logs one WARNING, the request
+finishes normally, and its log line ends with `trace=-`. Files appear atomically, so a trace you
+open is always a complete one.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |
@@ -910,7 +1064,7 @@ in the low hundreds on CUDA, and several seconds on CPU.
 | `llm.ready` is `false` | The container cannot reach the model server. For a Windows-side Ollama, `OLLAMA_HOST=0.0.0.0` must be set *and Ollama restarted*; `LLM_BASE_URL` must use `host.docker.internal`, not `127.0.0.1` (inside the container that is the container itself). Test with the `urllib` one-liner above, and check the Windows firewall. |
 | `Ctrl+Alt+Shift+D` does nothing in the IDE | (1) Something else owns the combo - **Settings -> Keymap**, search for `Vox`, and rebind whichever action loses. (2) There is no open project: both actions are disabled on the welcome screen. (3) The plugin is not installed or not enabled - check **Settings -> Plugins**, and look for the `Vox` status bar widget. |
 | The plugin copies the result instead of typing it | The notification says why: no terminal tab is open, the Terminal plugin is disabled, *Type the result into the terminal* is off in **Settings -> Tools -> Vox**, or the terminal API is not one Vox recognises. Open a terminal tab, or paste with `Ctrl+V`. |
-| `.vox.md` seems to be ignored | Plugin: the file must sit in the project root itself, be non-empty, and *Max `.vox.md` size* must not be `0`. Companion: the project's directory must be listed in `project.roots` and its folder name must appear in the title of the window you were in. Both log the reason at `DEBUG`, and the backend logs `project=<name> project_bytes=<n>` for every request that carried one. |
+| `.vox.md` seems to be ignored | Plugin: the file must sit in the project root itself, be non-empty, and *Max `.vox.md` size* must not be `0`. Companion: the project's directory must be listed in `project.roots` and its folder name must appear in the title of the window you were in. The companion logs the reason at INFO as `project_status=` in `%LOCALAPPDATA%\vox\client.log`, the plugin at `DEBUG`, and the backend logs `project=<name> project_bytes=<n>` for every request that carried one. To see the text that actually arrived, switch [tracing](#tracing-a-request) on. |
 | Hotkey does nothing | (1) The companion is not running - look for the tray icon. (2) Something else owns the combo; try another. (3) **The target app is elevated.** Windows refuses synthetic input from a lower-integrity process, so if IntelliJ runs as Administrator the companion must be elevated too - run it as Administrator, or better, stop running the IDE elevated. (4) A malformed binding: the companion prints `config error:` naming the offending key and exits with code 2. (5) An unsupported trigger key - only the keys listed under [Changing hotkeys](#changing-hotkeys) are recognised. |
 | Recording never stops | Only the trigger key's release stops it, and `audio.max_seconds` (120 s) caps it regardless. Press `Esc` to discard. |
 | `Microphone unavailable` / `Microphone error` | The device is missing, in use exclusively by another app (Zoom, Teams, OBS), or blocked. Check Settings -> Privacy & security -> Microphone -> "Let desktop apps access your microphone", then `uv run vox-client --list-devices` and pin `audio.input_device`. |
@@ -919,6 +1073,41 @@ in the low hundreds on CUDA, and several seconds on CPU.
 | Clipboard not restored, or `Clipboard busy` | The Windows clipboard is frequently locked by another process; `set_text` retries a few times. Restore happens `paste.restore_delay_ms` (600 ms) after the paste and is unconditional, so anything you copy inside that short window is overwritten by the restored text; lengthen or disable it if that bites. Failures to save or restore are logged and never fail the request. Set `paste.preserve_clipboard: false` to switch the behaviour off. |
 | Hotkeys stop working on a Russian layout | Handled: when a `KeyCode` has no ASCII `char` (as with Cyrillic), the key is derived from the virtual-key code, so `Ctrl+Alt+D` fires on the physical `D`/`В` key in either layout. If it still misbehaves, run with `logging.level: DEBUG` and check which key name the listener reports. |
 | Wrong words for English terms | Add the spoken form to `config/glossary.yaml` and rebuild the backend. |
+| The text comes back wrong, but nothing errored | Nothing in the log will tell you why - the log never contains the text. Switch [tracing](#tracing-a-request) on, dictate the same thing again, and read the transcript, the prompt and the raw model output with `.\scripts\show-trace.ps1`. |
+
+### Where the logs are
+
+The backend logs one INFO line per successful request, and nothing else per request:
+
+```powershell
+docker compose logs -f backend
+```
+
+```
+request_id=3f9a1c07b2d4 mode=clean audio_s=6.43 stt_ms=380 llm_ms=910 total_ms=1298 out_chars=67 project=Jigward project_bytes=1840 system_chars=2274 user_chars=1902 trace=20260912-142233-518-3f9a1c07b2d4.json
+```
+
+There is no transcript in it, by design. `project=` is the name the client reported and
+`project_bytes=` the size of the `.vox.md` it sent (`-` and `0` when none came); `system_chars` and
+`user_chars` are the size of the prompt built from them, which is the quickest check that a project
+file actually reached the model; and `trace=` names that request's trace file, or `-` when tracing
+is off. `LOG_TEXT=true` together with `LOG_LEVEL=DEBUG` adds the transcript and the output to the
+log - a debugging switch, not a setting (see [Privacy](#privacy)). For the text itself and the
+whole prompt, use [tracing](#tracing-a-request) rather than turning the log up.
+
+The companion logs to `%LOCALAPPDATA%\vox\client.log` (rotated at 1 MB, two old files kept) - it
+has no console of its own when `start.ps1` launches it - and prints one INFO line per dictation
+before it sends:
+
+```
+sending mode=context project=Jigward project_file=C:\src\Jigward\.vox.md project_bytes=1840 truncated=False project_status=ok window=328964
+```
+
+`project_status` is why the project context is or is not there: `ok`, `off` (detection disabled or
+no usable window title), `no-match` (no configured root's folder name occurs in the window title),
+or `missing` / `unreadable` / `empty` for a root that matched but whose file could not be used.
+`logging.level: DEBUG` in `config/client.yaml` adds the rest. The plugin logs into the IDE's own
+`idea.log`.
 
 ---
 
@@ -980,7 +1169,8 @@ Interactive docs are at <http://127.0.0.1:8765/docs>.
   dropped. Nothing is written to disk, on either side. `*.wav` is gitignored as a second line of
   defence.
 * **No database, no history.** The backend is stateless between requests; the only volumes are
-  model caches (`hf-cache`, `ct2-cache`, `ollama-models`).
+  model caches (`hf-cache`, `ct2-cache`, `ollama-models`). `compose.yaml` also mounts `./traces`,
+  which stays empty unless you switch tracing on.
 * **Your repository is never read by the backend.** The only file either client opens is the
   `.vox.md` you put in the project root, and only its text is sent - never a path, never a listing,
   never any other file.
@@ -988,6 +1178,11 @@ Interactive docs are at <http://127.0.0.1:8765/docs>.
   logs a project file as its name and byte count and nothing more. `LOG_TEXT=true` (backend) and
   `logging.log_text: true` (client) add the text itself to `DEBUG` output; both default to false,
   and they are debugging switches, not settings.
+* **Request tracing is the one exception, and you have to ask for it.** With `VOX_TRACE_DIR` set,
+  the backend writes one JSON file per request holding the transcript, the project text, the whole
+  prompt and the model output - see [Tracing a request](#tracing-a-request). Unset, which is the
+  default, nothing is ever written. `LLM_API_KEY` never appears in a trace, and the trace directory
+  is gitignored.
 * **Clipboard contents** are read only to restore what you had, and only when
   `paste.preserve_clipboard` is on.
 * The backend port is published as `127.0.0.1:8765:8765` - loopback only, not reachable from the
@@ -1056,7 +1251,7 @@ vox/
 │  ├─ clean.md                   short explicit request
 │  └─ task.md                    expanded task + open questions
 ├─ scripts/                      install-client.ps1, start.ps1, stop.ps1,
-│                               build-client.ps1, smoke-test.ps1
+│                               build-client.ps1, smoke-test.ps1, show-trace.ps1
 ├─ plugin/                       the IntelliJ IDEA plugin (Kotlin, Gradle)
 │  ├─ README.md                  build, install, settings, terminal delivery
 │  ├─ build.gradle.kts           IntelliJ Platform Gradle plugin, JVM 21 target
@@ -1076,6 +1271,7 @@ vox/
 │  │  ├─ glossary.py             glossary loading and prompt rendering
 │  │  ├─ llm.py                  OpenAI-compatible client, output cleanup
 │  │  ├─ processor.py            STT -> mode -> LLM -> wrapper pipeline
+│  │  ├─ trace.py                opt-in per-request JSON trace (VOX_TRACE_DIR)
 │  │  └─ health.py               server state and /health assembly
 │  └─ vox_client/
 │     ├─ main.py                 wiring, delivery, tray, CLI

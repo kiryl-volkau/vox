@@ -8,7 +8,6 @@ import tempfile
 import threading
 import time
 from contextlib import suppress
-from dataclasses import dataclass
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
@@ -39,7 +38,7 @@ from vox_client.config import (
 )
 from vox_client.hotkeys import HotkeyListener
 from vox_client.overlay import Overlay
-from vox_client.project import resolve_project
+from vox_client.project import ProjectSource, resolve_project_source
 from vox_client.recorder import Recorder, RecorderError, list_input_devices
 from vox_client.state import (
     CancelRecording,
@@ -57,10 +56,7 @@ _RETRY_DELAY_S = 1.0
 _MODIFIER_RELEASE_TIMEOUT_S = 1.0
 
 
-@dataclass(frozen=True, slots=True)
-class _ProjectContext:
-    name: str | None = None
-    text: str | None = None
+_ProjectContext = ProjectSource
 
 
 class VoiceCodeApp:
@@ -155,6 +151,7 @@ class VoiceCodeApp:
             self._machine.processing_finished()
             return
         self._job += 1
+        _log_provenance(mode, self._project, self._target_hwnd)
         self._overlay.show("Transcribing...", style="info")
         threading.Thread(
             target=self._worker,
@@ -190,7 +187,7 @@ class VoiceCodeApp:
                 result.request_id,
                 result.mode,
                 seconds,
-                project.name,
+                project.name or "-",
                 result.server_ms,
                 len(result.output),
             )
@@ -259,9 +256,12 @@ class VoiceCodeApp:
         if hwnd is None or not project.roots:
             return _ProjectContext()
         try:
-            name, text = resolve_project(
+            title = window_title(hwnd)
+            # DEBUG only: a window title routinely names the file that is open.
+            logger.debug("window %s is titled %r", hwnd, title)
+            return resolve_project_source(
                 project.roots,
-                window_title(hwnd),
+                title,
                 project.file_name,
                 max_bytes=project.max_bytes,
                 detect_from_window=project.detect_from_window,
@@ -269,7 +269,6 @@ class VoiceCodeApp:
         except Exception:
             logger.debug("project lookup failed", exc_info=True)
             return _ProjectContext()
-        return _ProjectContext(name=name, text=text)
 
     def _deliver(self, output: str, target_hwnd: int | None) -> None:
         paste = self._config.paste
@@ -432,6 +431,20 @@ class VoiceCodeApp:
 def _recording_text(mode: str, elapsed_s: float) -> str:
     total = max(0, int(elapsed_s))
     return f"{mode.upper()} - Recording {total // 60:02d}:{total % 60:02d}"
+
+
+def _log_provenance(mode: str, project: _ProjectContext, hwnd: int | None) -> None:
+    logger.info(
+        "sending mode=%s project=%s project_file=%s project_bytes=%d truncated=%s "
+        "project_status=%s window=%s",
+        mode,
+        project.name or "-",
+        project.path or "-",
+        project.sent_bytes,
+        project.truncated,
+        project.status,
+        hwnd if hwnd is not None else "-",
+    )
 
 
 def log_directory() -> Path:

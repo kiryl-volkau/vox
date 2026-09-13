@@ -505,3 +505,55 @@ async def test_the_project_text_never_reaches_an_info_log(
     assert any(record.levelno == logging.INFO for record in caplog.records)
     assert PROJECT_MARKER not in caplog.text
     assert PROJECT not in caplog.text
+
+
+async def test_the_info_line_reports_provenance_but_still_no_text(
+    mode_factory: ModeFactory,
+    registry_factory: RegistryFactory,
+    processor_factory: ProcessorFactory,
+    transcriber_factory: Callable[..., Any],
+    llm_factory: Callable[..., Any],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """One line per request, carrying which project and how big a prompt, never the text."""
+    transcript = "посмотри мембершип"
+    mode = mode_factory("clean", requires_llm=True, system_prompt=SYSTEM_WITH_PROJECT)
+    processor = processor_factory(
+        transcriber_factory(transcript), llm_factory("Проверь membership."), registry_factory(mode)
+    )
+
+    with caplog.at_level(logging.INFO):
+        await processor.process(
+            AUDIO, "clean", request_id="req-22", project=PROJECT, project_name="jigward"
+        )
+
+    line = next(record.getMessage() for record in caplog.records if record.levelno == logging.INFO)
+    assert "request_id=req-22" in line
+    assert "mode=clean" in line
+    assert "project=jigward" in line
+    assert f"project_bytes={len(PROJECT.encode())}" in line
+    assert "system_chars=" in line
+    assert "user_chars=" in line
+    assert transcript not in line
+    assert PROJECT_MARKER not in line
+
+
+async def test_the_info_line_says_a_dash_when_nothing_was_traced(
+    mode_factory: ModeFactory,
+    registry_factory: RegistryFactory,
+    processor_factory: ProcessorFactory,
+    transcriber_factory: Callable[..., Any],
+    llm_factory: Callable[..., Any],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    processor = processor_factory(
+        transcriber_factory(), llm_factory(), registry_factory(mode_factory("dictation"))
+    )
+
+    with caplog.at_level(logging.INFO):
+        await processor.process(AUDIO, "dictation", request_id="req-23")
+
+    line = next(record.getMessage() for record in caplog.records if record.levelno == logging.INFO)
+    assert "project=-" in line
+    assert "project_bytes=0" in line
+    assert "trace=-" in line

@@ -29,6 +29,8 @@ def test_defaults_match_the_documented_contract() -> None:
     assert settings.processing_concurrency == 1
     assert settings.log_level == "INFO"
     assert settings.log_text is False
+    assert settings.trace_dir is None
+    assert settings.trace_keep == 200
     assert settings.modes_dir == Path("modes")
     assert settings.glossary_path == Path("config/glossary.yaml")
     assert settings.max_audio_bytes == 25_000_000
@@ -55,6 +57,8 @@ def test_every_field_can_come_from_the_environment(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv("PROCESSING_CONCURRENCY", "4")
     monkeypatch.setenv("LOG_LEVEL", "DEBUG")
     monkeypatch.setenv("LOG_TEXT", "true")
+    monkeypatch.setenv("VOX_TRACE_DIR", "/srv/traces")
+    monkeypatch.setenv("VOX_TRACE_KEEP", "25")
     monkeypatch.setenv("MODES_DIR", "/srv/modes")
     monkeypatch.setenv("GLOSSARY_PATH", "/srv/glossary.yaml")
     monkeypatch.setenv("MAX_AUDIO_BYTES", "1024")
@@ -81,6 +85,8 @@ def test_every_field_can_come_from_the_environment(monkeypatch: pytest.MonkeyPat
     assert settings.processing_concurrency == 4
     assert settings.log_level == "DEBUG"
     assert settings.log_text is True
+    assert settings.trace_dir == Path("/srv/traces")
+    assert settings.trace_keep == 25
     assert settings.modes_dir == Path("/srv/modes")
     assert settings.glossary_path == Path("/srv/glossary.yaml")
     assert settings.max_audio_bytes == 1024
@@ -128,6 +134,16 @@ def test_unknown_environment_names_are_ignored(monkeypatch: pytest.MonkeyPatch) 
 def test_stt_device_is_restricted_to_the_documented_values() -> None:
     with pytest.raises(ValidationError):
         Settings(_env_file=None, stt_device="gpu")
+
+
+@pytest.mark.parametrize("value", ["", "   "])
+def test_a_blank_trace_directory_leaves_tracing_off(
+    value: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """VOX_TRACE_DIR= would otherwise mean Path("."), writing transcripts into the workdir."""
+    monkeypatch.setenv("VOX_TRACE_DIR", value)
+
+    assert Settings(_env_file=None).trace_dir is None
 
 
 def test_the_api_key_is_not_leaked_by_repr(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -205,3 +221,13 @@ def test_unpassed_options_do_not_clobber_defaults() -> None:
     assert settings.host == "0.0.0.0"
     assert settings.port == 8765
     assert settings.modes_dir == Path("modes")
+    assert settings.trace_dir is None
+
+
+def test_tracing_can_be_switched_on_from_the_command_line() -> None:
+    from vox_server.main import settings_from_args
+
+    settings = settings_from_args(["--trace-dir", "/srv/traces", "--trace-keep", "5"])
+
+    assert settings.trace_dir == Path("/srv/traces")
+    assert settings.trace_keep == 5

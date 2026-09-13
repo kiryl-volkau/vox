@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -51,12 +51,24 @@ class Settings(BaseSettings):
     log_level: str = Field("INFO", validation_alias="LOG_LEVEL")
     log_text: bool = Field(False, validation_alias="LOG_TEXT")
 
+    trace_dir: Path | None = Field(None, validation_alias="VOX_TRACE_DIR")
+    trace_keep: int = Field(200, validation_alias="VOX_TRACE_KEEP")
+
     modes_dir: Path = Field(Path("modes"), validation_alias="MODES_DIR")
     glossary_path: Path = Field(Path("config/glossary.yaml"), validation_alias="GLOSSARY_PATH")
 
     max_audio_bytes: int = Field(25_000_000, validation_alias="MAX_AUDIO_BYTES")
     max_audio_seconds: float = Field(300.0, validation_alias="MAX_AUDIO_SECONDS")
     max_project_bytes: int = Field(8000, validation_alias="MAX_PROJECT_BYTES")
+
+    @field_validator("trace_dir", mode="before")
+    @classmethod
+    def _blank_trace_dir_disables_tracing(cls, value: object) -> object:
+        # "VOX_TRACE_DIR=" would otherwise parse as Path("."), silently switching on a
+        # diagnostic that writes transcripts and prompts into the working directory.
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
 
 _installed: Settings | None = None

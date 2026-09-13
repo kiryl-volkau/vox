@@ -24,6 +24,11 @@ services:
     volumes:
       - hf-cache:/cache/huggingface
       - ct2-cache:/cache/ctranslate2
+      # Diagnostic traces, readable from Windows in the repository's own traces directory.
+      # Nothing is ever written there until VOX_TRACE_DIR=/traces is set in .env: tracing is
+      # off by default because it puts transcripts and prompts on disk. Read what lands there
+      # with scripts/show-trace.ps1.
+      - ./traces:/traces
     deploy:
       resources:
         reservations:

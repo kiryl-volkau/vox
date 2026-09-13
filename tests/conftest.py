@@ -28,6 +28,7 @@ from vox_server.llm import OpenAICompatibleClient
 from vox_server.models import TranscriptionResult
 from vox_server.modes import Mode, ModeRegistry
 from vox_server.processor import Processor
+from vox_server.trace import TraceWriter
 from vox_server.transcription import Transcriber
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -56,6 +57,8 @@ _SERVER_ENV_VARS = (
     "MAX_AUDIO_BYTES",
     "MAX_AUDIO_SECONDS",
     "MAX_PROJECT_BYTES",
+    "VOX_TRACE_DIR",
+    "VOX_TRACE_KEEP",
 )
 
 
@@ -217,14 +220,16 @@ def make_processor(
     *,
     glossary: Glossary | None = None,
     settings: Settings | None = None,
+    trace_writer: TraceWriter | None = None,
 ) -> Processor:
-    """Wire a Processor around fake collaborators."""
+    """Wire a Processor around fake collaborators; without a writer nothing is traced."""
     return Processor(
         cast(Transcriber, transcriber),
         cast(OpenAICompatibleClient, llm),
         modes,
         glossary if glossary is not None else Glossary(),
         settings if settings is not None else make_settings(),
+        trace_writer,
     )
 
 
