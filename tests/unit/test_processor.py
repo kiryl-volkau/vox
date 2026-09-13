@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -17,6 +18,10 @@ from vox_server.processor import (
 )
 
 AUDIO = b"RIFF-not-really-decoded-by-the-fake"
+PROJECT_MARKER = "ПРОЕКТ-МАРКЕР-7"
+PROJECT = f"{PROJECT_MARKER}: модуль billing не трогаем.\nДжигвард -> Jigward."
+PROJECT_HEADER = "КОНТЕКСТ ПРОЕКТА"
+SYSTEM_WITH_PROJECT = "Ты редактор инженерных запросов.\n\n{project}"
 
 ModeFactory = Callable[..., Mode]
 RegistryFactory = Callable[..., ModeRegistry]
@@ -377,3 +382,126 @@ async def test_the_semaphore_reflects_the_configured_concurrency(
     await processor.semaphore.acquire()
     assert processor.semaphore.locked()
     processor.semaphore.release()
+
+
+async def test_the_project_reaches_the_system_prompt_and_never_the_user_message(
+    mode_factory: ModeFactory,
+    registry_factory: RegistryFactory,
+    processor_factory: ProcessorFactory,
+    transcriber_factory: Callable[..., Any],
+    llm_factory: Callable[..., Any],
+) -> None:
+    """Project context belongs in the system prompt; the transcript stays last in the user one.
+
+    Ollama caches the prompt prefix, so a system prompt that is stable for a given project is
+    re-used across requests (measured: 87 ms on the first call, 24-27 ms afterwards, even with
+    a different user message). The transcript changes every request, so project text placed
+    after it would push the divergence into the cached region and force a full prefill every
+    single time.
+    """
+    llm = llm_factory("Проверь membership.")
+    mode = mode_factory(
+        "clean",
+        requires_llm=True,
+        system_prompt=SYSTEM_WITH_PROJECT,
+        user_template="Словарь:\n{glossary}\n\nРасшифровка:\n{transcript}",
+    )
+    processor = processor_factory(
+        transcriber_factory("посмотри мембершип"), llm, registry_factory(mode)
+    )
+
+    await processor.process(AUDIO, "clean", request_id="req-17", project=PROJECT)
+
+    system, user, _temperature = llm.calls[0]
+    assert PROJECT in system
+    assert PROJECT_HEADER in system
+    assert "{project}" not in system
+    assert PROJECT not in user
+    assert PROJECT_MARKER not in user
+    assert user.rstrip().endswith("посмотри мембершип")
+
+
+async def test_without_a_project_the_system_prompt_stays_bare(
+    mode_factory: ModeFactory,
+    registry_factory: RegistryFactory,
+    processor_factory: ProcessorFactory,
+    transcriber_factory: Callable[..., Any],
+    llm_factory: Callable[..., Any],
+) -> None:
+    llm = llm_factory("Проверь membership.")
+    mode = mode_factory("clean", requires_llm=True, system_prompt=SYSTEM_WITH_PROJECT)
+    processor = processor_factory(transcriber_factory(), llm, registry_factory(mode))
+
+    await processor.process(AUDIO, "clean", request_id="req-18")
+
+    system, _user, _temperature = llm.calls[0]
+    assert system.strip() == "Ты редактор инженерных запросов."
+    assert PROJECT_HEADER not in system
+    assert "{project}" not in system
+
+
+async def test_a_mode_without_an_llm_ignores_the_project(
+    mode_factory: ModeFactory,
+    registry_factory: RegistryFactory,
+    processor_factory: ProcessorFactory,
+    transcriber_factory: Callable[..., Any],
+    llm_factory: Callable[..., Any],
+) -> None:
+    llm = llm_factory("НЕ ДОЛЖНО ПОЯВИТЬСЯ")
+    mode = mode_factory("dictation", requires_llm=False, system_prompt=SYSTEM_WITH_PROJECT)
+    processor = processor_factory(transcriber_factory("сырой текст"), llm, registry_factory(mode))
+
+    response = await processor.process(AUDIO, "dictation", request_id="req-19", project=PROJECT)
+
+    assert llm.calls == []
+    assert response.normalized_text == "сырой текст"
+    assert response.output == "сырой текст"
+    assert PROJECT_MARKER not in response.output
+
+
+async def test_transform_only_also_puts_the_project_in_the_system_prompt(
+    mode_factory: ModeFactory,
+    registry_factory: RegistryFactory,
+    processor_factory: ProcessorFactory,
+    transcriber_factory: Callable[..., Any],
+    llm_factory: Callable[..., Any],
+) -> None:
+    llm = llm_factory("Проверь membership.")
+    mode = mode_factory("clean", requires_llm=True, system_prompt=SYSTEM_WITH_PROJECT)
+    processor = processor_factory(transcriber_factory(), llm, registry_factory(mode))
+
+    response = await processor.transform_only(
+        "посмотри мембершип", "clean", request_id="req-20", project=PROJECT
+    )
+
+    system, user, _temperature = llm.calls[0]
+    assert PROJECT in system
+    assert PROJECT not in user
+    assert user == "посмотри мембершип"
+    assert response.normalized_text == "Проверь membership."
+
+
+async def test_the_project_text_never_reaches_an_info_log(
+    mode_factory: ModeFactory,
+    registry_factory: RegistryFactory,
+    processor_factory: ProcessorFactory,
+    transcriber_factory: Callable[..., Any],
+    llm_factory: Callable[..., Any],
+    settings_factory: Callable[..., Settings],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """log_text unlocks DEBUG only: INFO lines stay safe to ship to a log aggregator."""
+    mode = mode_factory("clean", requires_llm=True, system_prompt=SYSTEM_WITH_PROJECT)
+    processor = processor_factory(
+        transcriber_factory(),
+        llm_factory("Проверь membership."),
+        registry_factory(mode),
+        settings=settings_factory(log_text=True),
+    )
+
+    with caplog.at_level(logging.INFO):
+        await processor.process(AUDIO, "clean", request_id="req-21", project=PROJECT)
+
+    assert any(record.levelno == logging.INFO for record in caplog.records)
+    assert PROJECT_MARKER not in caplog.text
+    assert PROJECT not in caplog.text

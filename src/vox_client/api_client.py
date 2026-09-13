@@ -93,23 +93,39 @@ class VoiceCodeClient:
             timeout=httpx.Timeout(config.timeout_seconds, connect=config.connect_timeout_seconds),
         )
 
-    def process(self, wav: bytes, mode: str, *, audio_seconds: float) -> ProcessResult:
+    def process(
+        self,
+        wav: bytes,
+        mode: str,
+        *,
+        audio_seconds: float,
+        project: str | None = None,
+        project_name: str | None = None,
+    ) -> ProcessResult:
         """Upload ``wav`` for transcription and mode processing.
 
         ``audio_seconds`` is the captured duration and is sent as request metadata only.
+        ``project`` is the text of the caller's ``.vox.md``, already truncated to what the
+        caller is willing to send, and ``project_name`` names it for the backend's logs;
+        each is left out of the request entirely when None.
         Raises :class:`ApiUnavailableError` when the backend is down,
         :class:`ApiTimeoutError` when it is too slow, :class:`ApiError` otherwise.
         """
+        data = {
+            "mode": mode,
+            "audio_seconds": f"{audio_seconds:.3f}",
+            "client_id": CLIENT_ID,
+            "client_version": CLIENT_VERSION,
+        }
+        if project is not None:
+            data["project"] = project
+        if project_name is not None:
+            data["project_name"] = project_name
         response = self._call(
             "POST",
             "/v1/process",
             files={"audio": ("audio.wav", wav, "audio/wav")},
-            data={
-                "mode": mode,
-                "audio_seconds": f"{audio_seconds:.3f}",
-                "client_id": CLIENT_ID,
-                "client_version": CLIENT_VERSION,
-            },
+            data=data,
         )
         payload = self._payload(response)
         output = payload.get("output")

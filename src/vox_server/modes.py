@@ -16,6 +16,11 @@ logger = logging.getLogger(__name__)
 _FRONT_MATTER_DELIMITER = "---"
 _SECTION_HEADERS = {"## SYSTEM": "system", "## USER": "user", "## WRAPPER": "wrapper"}
 _DEFAULT_USER_TEMPLATE = "{transcript}"
+_PROJECT_PLACEHOLDER = "{project}"
+_PROJECT_CONTEXT_HEADER = (
+    "\n\nКОНТЕКСТ ПРОЕКТА (термины, ограничения и примеры этого репозитория; следуй им, но НЕ\n"
+    "добавляй из них того, о чём не просили):\n"
+)
 
 
 class ModeError(RuntimeError):
@@ -55,6 +60,18 @@ class Mode:
     system_prompt: str
     user_template: str
     wrapper_template: str
+
+    def render_system(self, project: str) -> str:
+        """Return the system prompt with ``{project}`` substituted.
+
+        ``project`` is the text of the caller's project context file, already truncated.
+        Blank text removes the placeholder entirely, so no header is left dangling;
+        otherwise the text is wrapped in a delimited context block. A system prompt
+        without the placeholder is returned unchanged.
+        """
+        text = project.strip()
+        block = f"{_PROJECT_CONTEXT_HEADER}{text}" if text else ""
+        return self.system_prompt.replace(_PROJECT_PLACEHOLDER, block)
 
     def render_user(self, transcript: str, glossary: str) -> str:
         """Return the user message with ``{transcript}`` and ``{glossary}`` substituted.

@@ -56,6 +56,7 @@ class Settings(BaseSettings):
 
     max_audio_bytes: int = Field(25_000_000, validation_alias="MAX_AUDIO_BYTES")
     max_audio_seconds: float = Field(300.0, validation_alias="MAX_AUDIO_SECONDS")
+    max_project_bytes: int = Field(8000, validation_alias="MAX_PROJECT_BYTES")
 
 
 _installed: Settings | None = None

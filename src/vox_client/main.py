@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 from contextlib import suppress
+from dataclasses import dataclass
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ from vox_client.clipboard import (
     send_enter,
     send_paste,
     set_text,
+    window_title,
 )
 from vox_client.config import (
     ClientConfig,
@@ -37,6 +39,7 @@ from vox_client.config import (
 )
 from vox_client.hotkeys import HotkeyListener
 from vox_client.overlay import Overlay
+from vox_client.project import resolve_project
 from vox_client.recorder import Recorder, RecorderError, list_input_devices
 from vox_client.state import (
     CancelRecording,
@@ -52,6 +55,12 @@ _TICK_MS = 200
 _FORMATTING_HINT_S = 0.9
 _RETRY_DELAY_S = 1.0
 _MODIFIER_RELEASE_TIMEOUT_S = 1.0
+
+
+@dataclass(frozen=True, slots=True)
+class _ProjectContext:
+    name: str | None = None
+    text: str | None = None
 
 
 class VoiceCodeApp:
@@ -76,6 +85,7 @@ class VoiceCodeApp:
         self._recording_mode: str | None = None
         self._recording_started = 0.0
         self._target_hwnd: int | None = None
+        self._project = _ProjectContext()
         self._job = 0
         self._pending_job = 0
 
@@ -124,6 +134,7 @@ class VoiceCodeApp:
             return
         self._recording_mode = mode
         self._recording_started = time.monotonic()
+        self._project = self._resolve_project(self._target_hwnd)
         self._overlay.show(_recording_text(mode, 0.0), style="recording")
         self._overlay.after(_TICK_MS, self._tick)
 
@@ -147,7 +158,7 @@ class VoiceCodeApp:
         self._overlay.show("Transcribing...", style="info")
         threading.Thread(
             target=self._worker,
-            args=(wav, mode, seconds, self._job, self._target_hwnd, released_at),
+            args=(wav, mode, seconds, self._job, self._target_hwnd, released_at, self._project),
             name="vox-request",
             daemon=True,
         ).start()
@@ -167,17 +178,19 @@ class VoiceCodeApp:
         job: int,
         target_hwnd: int | None,
         released_at: float,
+        project: _ProjectContext,
     ) -> None:
         try:
-            result = self._request(wav, mode, seconds, job)
+            result = self._request(wav, mode, seconds, job, project)
             if result is None:
                 return
             answered_at = time.perf_counter()
             logger.info(
-                "request %s mode=%s audio=%.1fs server_ms=%s chars=%d",
+                "request %s mode=%s audio=%.1fs project=%s server_ms=%s chars=%d",
                 result.request_id,
                 result.mode,
                 seconds,
+                project.name,
                 result.server_ms,
                 len(result.output),
             )
@@ -203,7 +216,9 @@ class VoiceCodeApp:
         finally:
             self._machine.processing_finished()
 
-    def _request(self, wav: bytes, mode: str, seconds: float, job: int) -> ProcessResult | None:
+    def _request(
+        self, wav: bytes, mode: str, seconds: float, job: int, project: _ProjectContext
+    ) -> ProcessResult | None:
         self._pending_job = job
         hint = threading.Timer(_FORMATTING_HINT_S, self._hint_formatting, args=(job,))
         hint.daemon = True
@@ -211,7 +226,13 @@ class VoiceCodeApp:
         try:
             for attempt in (1, 2):
                 try:
-                    return self._client.process(wav, mode, audio_seconds=seconds)
+                    return self._client.process(
+                        wav,
+                        mode,
+                        audio_seconds=seconds,
+                        project=project.text,
+                        project_name=project.name,
+                    )
                 except ApiUnavailableError:
                     logger.warning("backend unreachable (attempt %d)", attempt)
                     if attempt == 2:
@@ -232,6 +253,23 @@ class VoiceCodeApp:
         finally:
             self._pending_job = 0
             hint.cancel()
+
+    def _resolve_project(self, hwnd: int | None) -> _ProjectContext:
+        project = self._config.project
+        if hwnd is None or not project.roots:
+            return _ProjectContext()
+        try:
+            name, text = resolve_project(
+                project.roots,
+                window_title(hwnd),
+                project.file_name,
+                max_bytes=project.max_bytes,
+                detect_from_window=project.detect_from_window,
+            )
+        except Exception:
+            logger.debug("project lookup failed", exc_info=True)
+            return _ProjectContext()
+        return _ProjectContext(name=name, text=text)
 
     def _deliver(self, output: str, target_hwnd: int | None) -> None:
         paste = self._config.paste

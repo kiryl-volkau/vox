@@ -56,3 +56,8 @@ desktop.ini
 # Logs
 *.log
 logs/
+
+# IntelliJ plugin build output
+plugin/build/
+plugin/.gradle/
+plugin/.intellijPlatform/

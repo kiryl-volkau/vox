@@ -48,6 +48,10 @@ def test_the_defaults_match_the_documented_contract() -> None:
     assert config.overlay.enabled is True
     assert config.overlay.position == "bottom-center"
     assert config.overlay.hide_delay_ms == 1200
+    assert config.project.roots == ()
+    assert config.project.file_name == ".vox.md"
+    assert config.project.detect_from_window is True
+    assert config.project.max_bytes == 8000
     assert config.logging.level == "INFO"
     assert config.logging.log_text is False
 
@@ -110,6 +114,27 @@ def test_the_device_name_and_sample_rate_round_trip(tmp_path: Path) -> None:
     assert config.audio.channels == 2
 
 
+def test_the_project_block_round_trips(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        {
+            "project": {
+                "roots": ["C:/Users/me/IdeaProjects/jigward", " D:/work/vox "],
+                "file_name": "PROJECT.md",
+                "detect_from_window": False,
+                "max_bytes": 4000,
+            }
+        },
+    )
+
+    project = load_config(path).project
+
+    assert project.roots == ("C:/Users/me/IdeaProjects/jigward", "D:/work/vox")
+    assert project.file_name == "PROJECT.md"
+    assert project.detect_from_window is False
+    assert project.max_bytes == 4000
+
+
 @pytest.mark.parametrize(
     ("document", "key"),
     [
@@ -139,6 +164,19 @@ def test_the_device_name_and_sample_rate_round_trip(tmp_path: Path) -> None:
         ({"paste": {"enabled": "yes"}}, "paste.enabled"),
         ({"overlay": {"position": "left"}}, "overlay.position"),
         ({"overlay": {"hide_delay_ms": -5}}, "overlay.hide_delay_ms"),
+        ({"project": {"roots": "C:/one/project"}}, "project.roots"),
+        ({"project": {"roots": [7]}}, "project.roots"),
+        ({"project": {"roots": ["   "]}}, "project.roots"),
+        ({"project": {"roots": [None]}}, "project.roots"),
+        ({"project": {"file_name": "  "}}, "project.file_name"),
+        ({"project": {"file_name": "docs/.vox.md"}}, "project.file_name"),
+        ({"project": {"file_name": "docs\\.vox.md"}}, "project.file_name"),
+        ({"project": {"file_name": 5}}, "project.file_name"),
+        ({"project": {"max_bytes": 0}}, "project.max_bytes"),
+        ({"project": {"max_bytes": -1}}, "project.max_bytes"),
+        ({"project": {"max_bytes": "8k"}}, "project.max_bytes"),
+        ({"project": {"detect_from_window": "yes"}}, "project.detect_from_window"),
+        ({"project": []}, "project"),
         ({"logging": {"level": "LOUD"}}, "logging.level"),
         ({"logging": {"log_text": 1}}, "logging.log_text"),
     ],
@@ -171,6 +209,8 @@ def test_the_example_config_shipped_with_the_repository_loads(repo_root: Path) -
     assert config.paste.shortcut == "ctrl+v"
     assert config.server.base_url == "http://127.0.0.1:8765"
     assert config.overlay.position in {"bottom-center", "top-center"}
+    assert config.project.roots == ()
+    assert config.project.file_name == ".vox.md"
     assert config == default_config()
 
 

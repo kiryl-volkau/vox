@@ -132,6 +132,21 @@ async def _read_upload(audio: UploadFile, settings: Settings, audio_seconds: flo
     return data
 
 
+def _log_project(
+    request_id: str, name: str | None, project: str | None, settings: Settings
+) -> None:
+    if not project:
+        return
+    logger.info(
+        "request_id=%s project=%s project_bytes=%d",
+        request_id,
+        name or "-",
+        len(project.encode("utf-8")),
+    )
+    if settings.log_text:
+        logger.debug("request_id=%s project_text=%r", request_id, project)
+
+
 def _degraded_health(settings: Settings, reason: str, state: ServerState | None) -> HealthResponse:
     return HealthResponse(
         status="degraded",
@@ -182,6 +197,8 @@ async def process_audio(
     request: Request,
     audio: Annotated[UploadFile, File()],
     mode: Annotated[str, Form()] = "context",
+    project: Annotated[str | None, Form()] = None,
+    project_name: Annotated[str | None, Form()] = None,
     client_id: Annotated[str | None, Form()] = None,
     client_version: Annotated[str | None, Form()] = None,
     audio_seconds: Annotated[float | None, Form()] = None,
@@ -200,7 +217,8 @@ async def process_audio(
         len(data),
         audio_seconds,
     )
-    return await processor.process(data, mode, request_id=request_id)
+    _log_project(request_id, project_name, project, state.settings)
+    return await processor.process(data, mode, request_id=request_id, project=project)
 
 
 @router.post("/v1/transcribe")
@@ -222,8 +240,10 @@ async def transform_text(request: Request, payload: TransformRequest) -> Transfo
     """Run already-transcribed text through a mode, for replaying or testing prompts."""
     state = _server_state(request)
     processor = _ready_processor(state, needs_stt=False)
+    request_id = _request_id(request)
+    _log_project(request_id, None, payload.project, state.settings)
     return await processor.transform_only(
-        payload.text, payload.mode, request_id=_request_id(request)
+        payload.text, payload.mode, request_id=request_id, project=payload.project
     )
 
 

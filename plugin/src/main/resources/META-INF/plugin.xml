@@ -1,0 +1,46 @@
+<idea-plugin>
+  <id>dev.vox.idea</id>
+  <name>Vox</name>
+  <vendor>Vox</vendor>
+
+  <description><![CDATA[
+    Voice dictation for the IDE. A trigger records the microphone, the local Vox backend transcribes
+    and rewrites it, and the result is typed into the active terminal tab without being executed.
+    The project file <code>.vox.md</code> in the project root is sent with every request as project
+    context; nothing else from the repository ever leaves the machine.
+  ]]></description>
+
+  <depends>com.intellij.modules.platform</depends>
+  <depends optional="true" config-file="vox-terminal.xml">org.jetbrains.plugins.terminal</depends>
+
+  <extensions defaultExtensionNs="com.intellij">
+    <notificationGroup id="Vox" displayType="BALLOON"/>
+    <applicationConfigurable
+        id="dev.vox.idea.settings"
+        parentId="tools"
+        displayName="Vox"
+        instance="dev.vox.idea.VoxConfigurable"/>
+    <statusBarWidgetFactory
+        id="dev.vox.idea.StatusWidget"
+        implementation="dev.vox.idea.VoxStatusWidgetFactory"/>
+  </extensions>
+
+  <actions>
+    <action
+        id="dev.vox.idea.DictateAction"
+        class="dev.vox.idea.DictateAction"
+        text="Vox: Dictate"
+        description="Start recording, or stop recording and send the audio to the Vox backend">
+      <add-to-group group-id="ToolsMenu" anchor="last"/>
+      <keyboard-shortcut keymap="$default" first-keystroke="control alt shift D"/>
+    </action>
+    <action
+        id="dev.vox.idea.CancelDictationAction"
+        class="dev.vox.idea.CancelDictationAction"
+        text="Vox: Cancel Dictation"
+        description="Discard the running recording without sending it">
+      <add-to-group group-id="ToolsMenu" anchor="after" relative-to-action="dev.vox.idea.DictateAction"/>
+      <keyboard-shortcut keymap="$default" first-keystroke="control alt shift X"/>
+    </action>
+  </actions>
+</idea-plugin>

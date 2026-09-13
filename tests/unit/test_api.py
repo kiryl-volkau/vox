@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
@@ -23,24 +24,44 @@ from vox_server.transcription import TranscriptionError
 
 API_KEY = "sk-super-secret-key"
 WAV = b"RIFF----WAVEfmt "
+PROJECT = "Термины: джигвард -> Jigward.\nМиграции уже применены."
+PROJECT_HEADER = "КОНТЕКСТ ПРОЕКТА"
+MAX_PROJECT_BYTES = 512
+PROJECT_LINES = tuple(
+    f"ПРАВИЛО-{index:03d}-НАЧАЛО: не трогай миграции ПРАВИЛО-{index:03d}-КОНЕЦ"
+    for index in range(64)
+)
+OVERSIZED_PROJECT = "\n".join(PROJECT_LINES)
 
 StateFactory = Callable[..., ServerState]
 AppFactory = Callable[..., FastAPI]
 
 
 class FakeProcessor:
-    """Answers the API routes without STT or an LLM behind it."""
+    """Answers the API routes without STT or an LLM behind it.
+
+    ``projects`` records the project text every project-aware route forwarded, one entry per
+    call, so a route that forwards nothing is distinguishable from one that forwards "".
+    """
 
     def __init__(self, *, output: str = "Проверь membership.", raises: Exception | None = None):
         self.output = output
         self.raises = raises
         self.calls: list[tuple[bytes, str, str]] = []
+        self.projects: list[str] = []
 
     async def process(
-        self, audio: bytes, mode_name: str, *, request_id: str, language: str | None = None
+        self,
+        audio: bytes,
+        mode_name: str,
+        *,
+        request_id: str,
+        language: str | None = None,
+        project: str = "",
     ) -> ProcessResponse:
         del language
         self.calls.append((audio, mode_name, request_id))
+        self.projects.append(project)
         if self.raises is not None:
             raise self.raises
         return ProcessResponse(
@@ -68,9 +89,10 @@ class FakeProcessor:
         )
 
     async def transform_only(
-        self, text: str, mode_name: str, *, request_id: str
+        self, text: str, mode_name: str, *, request_id: str, project: str = ""
     ) -> TransformResponse:
         self.calls.append((text.encode("utf-8"), mode_name, request_id))
+        self.projects.append(project)
         if self.raises is not None:
             raise self.raises
         return TransformResponse(
@@ -500,3 +522,129 @@ def test_health_probes_the_llm_with_a_short_budget(
     recorded = llm.check_timeouts  # type: ignore[attr-defined]
     assert recorded, "the health route did not probe the LLM"
     assert all(t is not None and t <= 5.0 for t in recorded), recorded
+
+
+def test_process_accepts_the_project_form_fields(
+    ready_state: ServerState, app_factory: AppFactory
+) -> None:
+    """The client sends .vox.md as a form field; project_name is for logs only.
+
+    FakeProcessor takes no project_name argument, so a route that forwarded it down the
+    pipeline would fail here with a TypeError instead of quietly reaching the model.
+    """
+    processor = FakeProcessor()
+    client = TestClient(app_factory(_with_processor(ready_state, processor)))
+
+    response = client.post(
+        "/v1/process",
+        files=_upload(),
+        data={
+            "mode": "context",
+            "project": PROJECT,
+            "project_name": "jigward",
+            "client_id": "vox-idea",
+            "client_version": "0.1.0",
+        },
+    )
+
+    assert response.status_code == 200
+    assert processor.projects == [PROJECT]
+
+
+def test_process_works_without_any_project(
+    ready_state: ServerState, app_factory: AppFactory
+) -> None:
+    processor = FakeProcessor()
+    client = TestClient(app_factory(_with_processor(ready_state, processor)))
+
+    response = client.post("/v1/process", files=_upload(), data={"mode": "context"})
+
+    assert response.status_code == 200
+    assert not processor.projects[0]
+
+
+def test_transform_accepts_a_project_in_the_json_body(
+    ready_state: ServerState, app_factory: AppFactory
+) -> None:
+    processor = FakeProcessor()
+    ready_state.transcriber = None
+    client = TestClient(app_factory(_with_processor(ready_state, processor)))
+
+    response = client.post(
+        "/v1/transform",
+        json={"text": "посмотри мембершип", "mode": "clean", "project": PROJECT},
+    )
+
+    assert response.status_code == 200
+    assert processor.projects == [PROJECT]
+
+
+def test_transform_works_without_a_project(
+    ready_state: ServerState, app_factory: AppFactory
+) -> None:
+    processor = FakeProcessor()
+    ready_state.transcriber = None
+    client = TestClient(app_factory(_with_processor(ready_state, processor)))
+
+    response = client.post("/v1/transform", json={"text": "посмотри мембершип", "mode": "clean"})
+
+    assert response.status_code == 200
+    assert not processor.projects[0]
+
+
+def test_an_oversized_project_is_truncated_instead_of_rejected(
+    state_factory: StateFactory,
+    settings_factory: Callable[..., Settings],
+    transcriber_factory: Callable[..., Any],
+    llm_factory: Callable[..., Any],
+    mode_factory: Callable[..., Any],
+    registry_factory: Callable[..., ModeRegistry],
+    processor_factory: Callable[..., Processor],
+    app_factory: AppFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A .vox.md over the limit is cut on a line boundary and the request still succeeds.
+
+    Drives the real Processor and reads the result off the system prompt the LLM received,
+    so the assertion holds wherever the cut is made. Half a project rule is worse than none,
+    so no partially copied line may survive.
+    """
+    settings = settings_factory(max_project_bytes=MAX_PROJECT_BYTES)
+    llm = llm_factory("Проверь membership.")
+    transcriber = transcriber_factory(ready=True)
+    modes = registry_factory(
+        mode_factory(
+            "context",
+            requires_llm=True,
+            system_prompt="Ты редактор инженерных запросов.\n\n{project}",
+        )
+    )
+    state = state_factory(
+        settings=settings,
+        transcriber=transcriber,
+        llm=llm,
+        modes=modes,
+        processor=processor_factory(transcriber, llm, modes, settings=settings),
+        llm_ready=True,
+    )
+    client = TestClient(app_factory(state))
+
+    with caplog.at_level(logging.INFO):
+        response = client.post(
+            "/v1/process",
+            files=_upload(),
+            data={"mode": "context", "project": OVERSIZED_PROJECT, "project_name": "jigward"},
+        )
+
+    assert response.status_code == 200
+    system, user, _temperature = llm.calls[0]
+    kept = [line for line in PROJECT_LINES if line in system]
+    assert kept, "the whole project was dropped instead of truncated"
+    assert kept == list(PROJECT_LINES[: len(kept)])
+    assert len("\n".join(kept).encode("utf-8")) <= MAX_PROJECT_BYTES
+    for dropped in PROJECT_LINES[len(kept) :]:
+        assert dropped.split(":")[0] not in system
+    assert PROJECT_HEADER in system
+    assert PROJECT_LINES[0] not in user
+    assert any(record.levelno == logging.WARNING for record in caplog.records)
+    assert PROJECT_LINES[0] not in caplog.text

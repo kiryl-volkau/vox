@@ -39,6 +39,7 @@ class TranscribeResponse(BaseModel):
 class TransformRequest(BaseModel):
     text: str
     mode: str = "clean"
+    project: str | None = None
 
 
 class TransformResponse(BaseModel):

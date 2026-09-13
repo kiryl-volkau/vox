@@ -30,6 +30,30 @@ def _elapsed_ms(start: float) -> int:
     return int((time.perf_counter() - start) * 1000)
 
 
+def _truncate_project(project: str | None, max_bytes: int) -> str:
+    """Return ``project`` cut to at most ``max_bytes`` UTF-8 bytes, on a line boundary.
+
+    ``None`` or blank text yields an empty string. Oversized text is truncated at the last
+    newline that fits, or mid-line when there is none, and never rejected; a WARNING names
+    the original byte count. The text itself is never logged.
+    """
+    if not project:
+        return ""
+    encoded = project.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return project
+    head = encoded[:max_bytes].decode("utf-8", errors="ignore")
+    boundary = head.rfind("\n")
+    kept = head[:boundary] if boundary > 0 else head
+    logger.warning(
+        "project context of %d bytes exceeds max_project_bytes=%d; truncated to %d bytes",
+        len(encoded),
+        max_bytes,
+        len(kept.encode("utf-8")),
+    )
+    return kept
+
+
 class Processor:
     """Runs voice requests through STT, the mode's LLM prompt and the Claude wrapper.
 
@@ -64,10 +88,14 @@ class Processor:
         *,
         request_id: str,
         language: str | None = None,
+        project: str | None = None,
     ) -> ProcessResponse:
         """Transcribe ``audio``, normalise it with ``mode_name`` and wrap it for Claude.
 
         ``language`` overrides the configured STT language; ``None`` keeps the default.
+        ``project`` is the caller's project context file; it reaches the system prompt of
+        modes that use an LLM, truncated to ``max_project_bytes``, and is ignored by the
+        rest.
         Raises UnknownModeError for an unknown mode (before any GPU work),
         EmptyTranscriptError when nothing was recognised, EmptyOutputError when the mode
         yields no text, plus TranscriptionError / LlmError from the underlying stages.
@@ -82,7 +110,7 @@ class Processor:
             if not transcript:
                 raise EmptyTranscriptError("speech recognition produced an empty transcript")
             llm_started = time.perf_counter()
-            normalized = await self._normalize(mode, transcript)
+            normalized = await self._normalize(mode, transcript, project)
             llm_ms = _elapsed_ms(llm_started) if mode.requires_llm else 0
             output = mode.render_wrapper(normalized)
             timings = TimingsMs(
@@ -105,8 +133,13 @@ class Processor:
         *,
         request_id: str,
         language: str | None = None,
+        project: str | None = None,  # noqa: ARG002
     ) -> TranscribeResponse:
-        """Transcribe ``audio`` without touching the LLM. Raises EmptyTranscriptError."""
+        """Transcribe ``audio`` without touching the LLM. Raises EmptyTranscriptError.
+
+        ``project`` is accepted so every entry point takes the same keywords, and ignored:
+        a raw transcript never reaches the LLM.
+        """
         started = time.perf_counter()
         async with self._semaphore:
             stt_started = time.perf_counter()
@@ -125,11 +158,17 @@ class Processor:
         )
 
     async def transform_only(
-        self, text: str, mode_name: str, *, request_id: str
+        self,
+        text: str,
+        mode_name: str,
+        *,
+        request_id: str,
+        project: str | None = None,
     ) -> TransformResponse:
         """Run ``text`` through a mode's LLM prompt and wrapper, skipping speech recognition.
 
-        Empty or whitespace-only ``text`` raises EmptyTranscriptError.
+        Empty or whitespace-only ``text`` raises EmptyTranscriptError. ``project`` is handled
+        exactly as in :meth:`process`.
         """
         mode = self._modes.get(mode_name)
         source = text.strip()
@@ -138,7 +177,7 @@ class Processor:
         started = time.perf_counter()
         async with self._semaphore:
             llm_started = time.perf_counter()
-            normalized = await self._normalize(mode, source)
+            normalized = await self._normalize(mode, source, project)
             llm_ms = _elapsed_ms(llm_started) if mode.requires_llm else 0
             output = mode.render_wrapper(normalized)
         timings = TimingsMs(transcription=0, llm=llm_ms, total=_elapsed_ms(started))
@@ -151,12 +190,13 @@ class Processor:
             timings_ms=timings,
         )
 
-    async def _normalize(self, mode: Mode, text: str) -> str:
+    async def _normalize(self, mode: Mode, text: str, project: str | None) -> str:
         if not mode.requires_llm:
             normalized = text
         else:
+            context = _truncate_project(project, self._settings.max_project_bytes)
             raw = await self._llm.chat(
-                mode.system_prompt,
+                mode.render_system(context),
                 mode.render_user(text, self._glossary_block),
                 temperature=mode.temperature,
             )

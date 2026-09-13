@@ -1,0 +1,181 @@
+package dev.vox.idea
+
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
+import com.google.gson.JsonSyntaxException
+import java.io.ByteArrayOutputStream
+import java.io.IOException
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.net.http.HttpTimeoutException
+import java.nio.charset.StandardCharsets
+import java.time.Duration
+import java.util.UUID
+
+const val VOX_CLIENT_ID = "vox-idea"
+
+/** A backend call failed; [message] is already short enough for a balloon. */
+class VoxException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
+
+class ProcessRequest(
+    val wav: ByteArray,
+    val audioSeconds: Double,
+    val mode: String,
+    val project: String?,
+    val projectName: String?,
+    val clientVersion: String,
+)
+
+class ProcessResult(val requestId: String, val output: String, val totalMs: Int)
+
+class HealthResult(
+    val status: String,
+    val sttModel: String,
+    val sttDevice: String,
+    val llmModel: String,
+)
+
+/**
+ * The Vox HTTP contract: `POST /v1/process` (multipart) and `GET /health`.
+ *
+ * Every failure - unreachable host, timeout, backend error body - surfaces as [VoxException] with a
+ * message meant for the user. Calls block, so they belong on a background thread.
+ */
+class VoxClient(private val baseUrl: String, private val requestTimeout: Duration) {
+
+    private val http: HttpClient =
+        HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
+            .connectTimeout(CONNECT_TIMEOUT)
+            .build()
+
+    fun process(request: ProcessRequest): ProcessResult {
+        val boundary = "VoxBoundary" + UUID.randomUUID().toString().replace("-", "")
+        val httpRequest =
+            HttpRequest.newBuilder(uri("/v1/process"))
+                .timeout(requestTimeout)
+                .header("Content-Type", "multipart/form-data; boundary=$boundary")
+                .POST(HttpRequest.BodyPublishers.ofByteArray(multipartBody(boundary, request)))
+                .build()
+        val body = send(httpRequest)
+        return ProcessResult(
+            requestId = body.stringOrEmpty("request_id"),
+            output = body.stringOrEmpty("output"),
+            totalMs = body.getAsJsonObject("timings_ms")?.get("total")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0,
+        )
+    }
+
+    fun health(): HealthResult {
+        val httpRequest =
+            HttpRequest.newBuilder(uri("/health")).timeout(HEALTH_TIMEOUT).GET().build()
+        val body = send(httpRequest)
+        val stt = body.getAsJsonObject("stt")
+        val llm = body.getAsJsonObject("llm")
+        return HealthResult(
+            status = body.stringOrEmpty("status"),
+            sttModel = stt?.stringOrEmpty("model").orEmpty(),
+            sttDevice = stt?.stringOrEmpty("device").orEmpty(),
+            llmModel = llm?.stringOrEmpty("model").orEmpty(),
+        )
+    }
+
+    private fun uri(path: String): URI =
+        try {
+            URI.create(baseUrl + path)
+        } catch (e: IllegalArgumentException) {
+            throw VoxException("the backend URL \"$baseUrl\" is not a valid URL", e)
+        }
+
+    private fun send(request: HttpRequest): JsonObject {
+        val response =
+            try {
+                http.send(request, HttpResponse.BodyHandlers.ofByteArray())
+            } catch (e: HttpTimeoutException) {
+                throw VoxException("the backend did not answer within ${requestTimeout.toSeconds()} s", e)
+            } catch (e: IOException) {
+                throw VoxException("cannot reach the backend at $baseUrl", e)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw VoxException("the request was interrupted", e)
+            }
+        val text = String(response.body(), StandardCharsets.UTF_8)
+        if (response.statusCode() !in 200..299) throw VoxException(errorMessage(response.statusCode(), text))
+        return parse(text)
+    }
+
+    private fun parse(text: String): JsonObject =
+        try {
+            JsonParser.parseString(text).asJsonObject
+        } catch (e: JsonSyntaxException) {
+            throw VoxException("the backend returned a response Vox could not read", e)
+        } catch (e: IllegalStateException) {
+            throw VoxException("the backend returned a response Vox could not read", e)
+        }
+
+    private fun errorMessage(status: Int, text: String): String {
+        val code =
+            try {
+                JsonParser.parseString(text).asJsonObject.stringOrEmpty("error")
+            } catch (e: RuntimeException) {
+                ""
+            }
+        return ERROR_MESSAGES[code] ?: "the backend answered $status"
+    }
+
+    private fun multipartBody(boundary: String, request: ProcessRequest): ByteArray {
+        val body = ByteArrayOutputStream(request.wav.size + MULTIPART_OVERHEAD_BYTES)
+        body.writeAscii("--$boundary\r\n")
+        body.writeAscii("Content-Disposition: form-data; name=\"audio\"; filename=\"audio.wav\"\r\n")
+        body.writeAscii("Content-Type: audio/wav\r\n\r\n")
+        body.write(request.wav)
+        body.writeAscii("\r\n")
+        val fields =
+            linkedMapOf(
+                "mode" to request.mode,
+                "audio_seconds" to "%.3f".format(java.util.Locale.ROOT, request.audioSeconds),
+                "client_id" to VOX_CLIENT_ID,
+                "client_version" to request.clientVersion,
+            )
+        request.project?.let { fields["project"] = it }
+        request.projectName?.let { fields["project_name"] = it }
+        for ((name, value) in fields) {
+            body.writeAscii("--$boundary\r\n")
+            body.writeAscii("Content-Disposition: form-data; name=\"$name\"\r\n\r\n")
+            body.write(value.toByteArray(StandardCharsets.UTF_8))
+            body.writeAscii("\r\n")
+        }
+        body.writeAscii("--$boundary--\r\n")
+        return body.toByteArray()
+    }
+
+    private fun ByteArrayOutputStream.writeAscii(text: String) =
+        write(text.toByteArray(StandardCharsets.US_ASCII))
+
+    private fun JsonObject.stringOrEmpty(name: String): String {
+        val member = get(name) ?: return ""
+        return if (member.isJsonPrimitive) member.asString else ""
+    }
+
+    private companion object {
+        val CONNECT_TIMEOUT: Duration = Duration.ofSeconds(3)
+        val HEALTH_TIMEOUT: Duration = Duration.ofSeconds(10)
+        const val MULTIPART_OVERHEAD_BYTES = 1024
+
+        val ERROR_MESSAGES =
+            mapOf(
+                "unknown_mode" to "unknown mode",
+                "empty_audio" to "no audio was captured",
+                "audio_too_large" to "the recording is too long",
+                "empty_transcript" to "nothing was recognised",
+                "empty_llm_output" to "the model returned nothing",
+                "stt_unavailable" to "speech recognition is unavailable",
+                "llm_timeout" to "the model timed out",
+                "llm_unavailable" to "the model is unreachable",
+                "llm_error" to "the model returned an error",
+                "warming" to "the backend is still warming up",
+                "internal_error" to "the backend failed",
+            )
+    }
+}

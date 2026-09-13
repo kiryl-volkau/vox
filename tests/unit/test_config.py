@@ -33,6 +33,7 @@ def test_defaults_match_the_documented_contract() -> None:
     assert settings.glossary_path == Path("config/glossary.yaml")
     assert settings.max_audio_bytes == 25_000_000
     assert settings.max_audio_seconds == 300.0
+    assert settings.max_project_bytes == 8000
 
 
 def test_every_field_can_come_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -58,6 +59,7 @@ def test_every_field_can_come_from_the_environment(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv("GLOSSARY_PATH", "/srv/glossary.yaml")
     monkeypatch.setenv("MAX_AUDIO_BYTES", "1024")
     monkeypatch.setenv("MAX_AUDIO_SECONDS", "42.5")
+    monkeypatch.setenv("MAX_PROJECT_BYTES", "1500")
 
     settings = Settings(_env_file=None)
 
@@ -83,6 +85,7 @@ def test_every_field_can_come_from_the_environment(monkeypatch: pytest.MonkeyPat
     assert settings.glossary_path == Path("/srv/glossary.yaml")
     assert settings.max_audio_bytes == 1024
     assert settings.max_audio_seconds == 42.5
+    assert settings.max_project_bytes == 1500
 
 
 def test_environment_names_are_case_insensitive(monkeypatch: pytest.MonkeyPatch) -> None:

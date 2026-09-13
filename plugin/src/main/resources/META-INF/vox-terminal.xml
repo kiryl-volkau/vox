@@ -1,0 +1,7 @@
+<!--
+  Loaded only when the Terminal plugin is present. It registers nothing: Vox finds the terminal at
+  runtime through the "TerminalView" data key and through JBTerminalWidget, both of which are
+  reachable without linking against the Terminal plugin, so Vox keeps working - falling back to the
+  clipboard - when that plugin is disabled or its API changes.
+-->
+<idea-plugin/>

@@ -16,6 +16,7 @@ from typing import Any
 import yaml
 
 from vox_client.hotkeys import TRIGGER_KEYS
+from vox_client.project import MAX_PROJECT_BYTES, PROJECT_FILE_NAME
 from vox_client.state import Hotkey
 
 MAX_RECORDING_SECONDS = 3600.0
@@ -87,6 +88,21 @@ class OverlayConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ProjectConfig:
+    """Where to look for a per-project ``.vox.md`` and how much of it to send.
+
+    ``roots`` are directories that may each hold one; the companion picks the one whose
+    folder name appears in the title of the focused window. No roots, or
+    ``detect_from_window`` false, means no project context is ever sent.
+    """
+
+    roots: tuple[str, ...] = ()
+    file_name: str = PROJECT_FILE_NAME
+    detect_from_window: bool = True
+    max_bytes: int = MAX_PROJECT_BYTES
+
+
+@dataclass(frozen=True, slots=True)
 class LoggingConfig:
     """``level`` is a standard logging level name, stored upper-cased."""
 
@@ -101,6 +117,7 @@ class ClientConfig:
     hotkeys: HotkeyConfig = field(default_factory=HotkeyConfig)
     paste: PasteConfig = field(default_factory=PasteConfig)
     overlay: OverlayConfig = field(default_factory=OverlayConfig)
+    project: ProjectConfig = field(default_factory=ProjectConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
 
 
@@ -164,6 +181,7 @@ def load_config(path: Path | None = None) -> ClientConfig:
         hotkeys=_hotkeys(_section(raw, "hotkeys"), defaults.hotkeys),
         paste=_paste(_section(raw, "paste"), defaults.paste),
         overlay=_overlay(_section(raw, "overlay"), defaults.overlay),
+        project=_project(_section(raw, "project"), defaults.project),
         logging=_logging(_section(raw, "logging"), defaults.logging),
     )
 
@@ -358,6 +376,41 @@ def _overlay(data: Mapping[str, Any], default: OverlayConfig) -> OverlayConfig:
         enabled=_read_bool(data, "overlay", "enabled", default.enabled),
         position=position,
         hide_delay_ms=hide_delay_ms,
+    )
+
+
+def _project(data: Mapping[str, Any], default: ProjectConfig) -> ProjectConfig:
+    raw = data.get("roots")
+    if raw is None:
+        roots = default.roots
+    elif isinstance(raw, list):
+        for entry in raw:
+            if not isinstance(entry, str) or not entry.strip():
+                raise ConfigError(
+                    "project.roots: every entry must be a non-empty directory path, "
+                    f"got {_type_name(entry)}"
+                )
+        roots = tuple(entry.strip() for entry in raw)
+    else:
+        raise ConfigError(f"project.roots: expected a list of paths, got {_type_name(raw)}")
+
+    file_name = _read_str(data, "project", "file_name", default.file_name).strip()
+    if not file_name:
+        raise ConfigError("project.file_name: must not be empty")
+    if "/" in file_name or "\\" in file_name:
+        raise ConfigError("project.file_name: must be a file name, not a path")
+
+    max_bytes = _read_int(data, "project", "max_bytes", default.max_bytes)
+    if max_bytes <= 0:
+        raise ConfigError("project.max_bytes: must be greater than 0")
+
+    return ProjectConfig(
+        roots=roots,
+        file_name=file_name,
+        detect_from_window=_read_bool(
+            data, "project", "detect_from_window", default.detect_from_window
+        ),
+        max_bytes=max_bytes,
     )
 
 

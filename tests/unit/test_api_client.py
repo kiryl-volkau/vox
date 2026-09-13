@@ -20,6 +20,11 @@ WAV = b"RIFF0000WAVEfmt this-is-the-audio"
 
 Handler = Callable[[httpx.Request], httpx.Response]
 
+PROJECT_TEXT = """# jigward
+
+membership - подписка пользователя, не участие в группе.
+"""
+
 PROCESS_BODY = {
     "request_id": "abc123def456",
     "mode": "context",
@@ -85,6 +90,50 @@ def test_process_posts_the_audio_and_the_metadata() -> None:
     assert b'name="audio_seconds"' in body
     assert b"2.500" in body
     assert CLIENT_ID.encode() in body
+
+
+def test_project_context_is_posted_as_its_own_fields() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=PROCESS_BODY)
+
+    client = _client(handler)
+    try:
+        client.process(
+            WAV,
+            "context",
+            audio_seconds=1.0,
+            project=PROJECT_TEXT,
+            project_name="jigward",
+        )
+    finally:
+        client.close()
+
+    body = seen[0].content
+    assert b'name="project"' in body
+    assert PROJECT_TEXT.encode() in body
+    assert b'name="project_name"' in body
+    assert b"jigward" in body
+
+
+def test_a_request_without_a_project_omits_both_fields() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=PROCESS_BODY)
+
+    client = _client(handler)
+    try:
+        client.process(WAV, "context", audio_seconds=1.0)
+    finally:
+        client.close()
+
+    body = seen[0].content
+    assert b'name="project"' not in body
+    assert b'name="project_name"' not in body
 
 
 def test_a_missing_output_field_is_a_malformed_reply() -> None:
