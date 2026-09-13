@@ -1,17 +1,19 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
 
 from . import __version__
 from .api import register_exception_handlers, register_routes
-from .config import Settings, get_settings, redacted_base_url
+from .config import Settings, get_settings, redacted_base_url, set_settings
 from .glossary import Glossary
 from .health import ServerState, refresh_llm
 from .llm import OpenAICompatibleClient
@@ -165,9 +167,54 @@ def create_app() -> FastAPI:
 app = create_app()
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
+    """Command-line overrides for every setting that is worth changing at launch.
+
+    Anything left unset falls back to the environment (or .env), then to the built-in
+    default, so the container keeps working with env vars alone while a native run can be
+    configured entirely from the command line.
+    """
+    parser = argparse.ArgumentParser(
+        prog="vox-server",
+        description="Vox backend: Whisper speech-to-text plus a local OpenAI-compatible LLM.",
+    )
+    parser.add_argument("--host", help="interface to bind (default 0.0.0.0)")
+    parser.add_argument("--port", type=int, help="port to bind (default 8765)")
+    parser.add_argument("--stt-model", help="Whisper model, e.g. turbo, large-v3, small")
+    parser.add_argument("--stt-language", help="forced language code, e.g. ru; empty to autodetect")
+    parser.add_argument("--stt-device", choices=("auto", "cuda", "cpu"), help="STT device")
+    parser.add_argument("--stt-compute-type", help="e.g. float16, int8_float16, int8")
+    parser.add_argument("--stt-beam-size", type=int, help="Whisper beam size (default 1)")
+    parser.add_argument("--llm-base-url", help="OpenAI-compatible base URL ending in /v1")
+    parser.add_argument("--llm-model", help="model name as the LLM server reports it")
+    parser.add_argument("--llm-timeout-seconds", type=float, help="per-request LLM timeout")
+    parser.add_argument("--llm-temperature", type=float, help="sampling temperature")
+    parser.add_argument("--llm-max-tokens", type=int, help="maximum tokens to generate")
+    parser.add_argument("--modes-dir", type=Path, help="directory holding the mode files")
+    parser.add_argument("--glossary-path", type=Path, help="glossary YAML file")
+    parser.add_argument("--processing-concurrency", type=int, help="concurrent AI pipelines")
+    parser.add_argument("--log-level", help="DEBUG, INFO, WARNING, ERROR")
+    parser.add_argument(
+        "--log-text",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="include transcripts and output in DEBUG logs",
+    )
+    parser.add_argument("--version", action="version", version=f"vox-server {__version__}")
+    return parser
+
+
+def settings_from_args(argv: Sequence[str] | None = None) -> Settings:
+    """Build Settings from the environment, overridden by any options actually passed."""
+    namespace = build_parser().parse_args(argv)
+    overrides = {key: value for key, value in vars(namespace).items() if value is not None}
+    return Settings(**overrides)
+
+
+def main(argv: Sequence[str] | None = None) -> None:
     """Serve the backend with uvicorn on the configured host and port."""
-    settings = get_settings()
+    settings = settings_from_args(argv)
+    set_settings(settings)
     configure_logging(settings.log_level)
     level = settings.log_level.strip().lower()
     uvicorn.run(

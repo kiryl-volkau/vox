@@ -175,3 +175,30 @@ def test_get_settings_is_cached_until_cleared(monkeypatch: pytest.MonkeyPatch) -
 
     assert refreshed is not first
     assert refreshed.stt_model == "small"
+
+
+def test_command_line_options_override_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The container configures itself from env vars; a native run uses the command line."""
+    from vox_server.main import settings_from_args
+
+    monkeypatch.setenv("STT_MODEL", "from-env")
+    monkeypatch.setenv("LLM_MODEL", "env-model")
+
+    from_env = settings_from_args([])
+    from_cli = settings_from_args(["--stt-model", "small", "--port", "9999"])
+
+    assert from_env.stt_model == "from-env"
+    assert from_cli.stt_model == "small"
+    assert from_cli.port == 9999
+    # Options that were not passed still fall back to the environment.
+    assert from_cli.llm_model == "env-model"
+
+
+def test_unpassed_options_do_not_clobber_defaults() -> None:
+    from vox_server.main import settings_from_args
+
+    settings = settings_from_args([])
+
+    assert settings.host == "0.0.0.0"
+    assert settings.port == 8765
+    assert settings.modes_dir == Path("modes")

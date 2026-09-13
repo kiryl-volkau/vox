@@ -58,13 +58,29 @@ class Settings(BaseSettings):
     max_audio_seconds: float = Field(300.0, validation_alias="MAX_AUDIO_SECONDS")
 
 
+_installed: Settings | None = None
+
+
 @lru_cache
 def get_settings() -> Settings:
-    """Return the process-wide Settings, built once from the environment.
+    """Return the process-wide Settings.
 
-    Cached: tests that mutate the environment must call ``get_settings.cache_clear()``.
+    Built from the environment unless :func:`set_settings` has installed an instance -
+    which is how command-line overrides reach the application. Cached: tests that mutate
+    the environment must call ``get_settings.cache_clear()``.
     """
-    return Settings()
+    return _installed if _installed is not None else Settings()
+
+
+def set_settings(settings: Settings) -> None:
+    """Install ``settings`` as the process-wide configuration.
+
+    Must be called before the app starts; clears the :func:`get_settings` cache so the
+    new instance is picked up.
+    """
+    global _installed
+    _installed = settings
+    get_settings.cache_clear()
 
 
 def redacted_base_url(url: str) -> str:
