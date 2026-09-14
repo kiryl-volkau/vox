@@ -12,12 +12,10 @@ class DictateAction : DumbAwareAction() {
     override fun update(event: AnActionEvent) {
         val project = event.project
         event.presentation.isEnabled = project != null
-        event.presentation.text =
-            if (project != null && VoxDictationService.getInstance(project).status == VoxDictationService.Status.RECORDING) {
-                "Vox: Stop Dictation"
-            } else {
-                "Vox: Dictate"
-            }
+        val recording =
+            project != null && VoxDictationService.getInstance(project).status == VoxDictationService.Status.RECORDING
+        event.presentation.text = if (recording) "Vox: Stop Dictation" else "Vox: Dictate"
+        event.presentation.icon = if (recording) VoxIcons.Recording else VoxIcons.Vox
     }
 
     override fun actionPerformed(event: AnActionEvent) {

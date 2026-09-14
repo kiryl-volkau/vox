@@ -6,8 +6,12 @@
   <description><![CDATA[
     Voice dictation for the IDE. A trigger records the microphone, the local Vox backend transcribes
     and rewrites it, and the result is typed into the active terminal tab without being executed.
-    The project file <code>.vox.md</code> in the project root is sent with every request as project
-    context; nothing else from the repository ever leaves the machine.
+    The raw transcript stays in the Vox tool window next to the message that was sent.
+    <br/><br/>
+    The project file <code>.vox.md</code> in the project root is sent with every request: its
+    <code>## SYSTEM</code> section steers how the answer is shaped, the rest is project context.
+    The recent Claude Code conversation for the project can be sent with it, so a dictated request
+    may refer to what was just discussed. Nothing else from the repository ever leaves the machine.
   ]]></description>
 
   <depends>com.intellij.modules.platform</depends>
@@ -23,24 +27,61 @@
     <statusBarWidgetFactory
         id="dev.vox.idea.StatusWidget"
         implementation="dev.vox.idea.VoxStatusWidgetFactory"/>
+    <toolWindow
+        id="Vox"
+        anchor="bottom"
+        icon="/icons/vox.svg"
+        factoryClass="dev.vox.idea.VoxWorkbenchToolWindowFactory"/>
   </extensions>
 
   <actions>
-    <action
-        id="dev.vox.idea.DictateAction"
-        class="dev.vox.idea.DictateAction"
-        text="Vox: Dictate"
-        description="Start recording, or stop recording and send the audio to the Vox backend">
+    <!-- One submenu rather than four loose entries: Tools is crowded, and the transcript store
+         and the prompt bench only make sense read together with the dictation trigger. -->
+    <group id="dev.vox.idea.VoxMenu" text="Vox" description="Voice dictation" popup="true" icon="/icons/vox.svg">
       <add-to-group group-id="ToolsMenu" anchor="last"/>
-      <keyboard-shortcut keymap="$default" first-keystroke="control alt shift D"/>
-    </action>
-    <action
-        id="dev.vox.idea.CancelDictationAction"
-        class="dev.vox.idea.CancelDictationAction"
-        text="Vox: Cancel Dictation"
-        description="Discard the running recording without sending it">
-      <add-to-group group-id="ToolsMenu" anchor="after" relative-to-action="dev.vox.idea.DictateAction"/>
-      <keyboard-shortcut keymap="$default" first-keystroke="control alt shift X"/>
-    </action>
+
+      <action
+          id="dev.vox.idea.DictateAction"
+          class="dev.vox.idea.DictateAction"
+          text="Dictate"
+          icon="/icons/vox.svg"
+          description="Start recording, or stop recording and send the audio to the Vox backend">
+        <keyboard-shortcut keymap="$default" first-keystroke="control alt shift D"/>
+      </action>
+      <action
+          id="dev.vox.idea.CancelDictationAction"
+          class="dev.vox.idea.CancelDictationAction"
+          text="Cancel Dictation"
+          icon="AllIcons.Actions.Cancel"
+          description="Discard the running recording without sending it">
+        <keyboard-shortcut keymap="$default" first-keystroke="control alt shift X"/>
+      </action>
+
+      <separator/>
+
+      <action
+          id="dev.vox.idea.OpenWorkbenchAction"
+          class="dev.vox.idea.OpenWorkbenchAction"
+          text="Transcripts and Prompt Bench"
+          icon="AllIcons.Actions.ListFiles"
+          description="Open the stored transcripts and replay one through a prompt">
+        <keyboard-shortcut keymap="$default" first-keystroke="control alt shift T"/>
+      </action>
+      <action
+          id="dev.vox.idea.EditProjectContextAction"
+          class="dev.vox.idea.EditProjectContextAction"
+          text="Edit Project Context…"
+          icon="AllIcons.Actions.Edit"
+          description="Open .vox.md, the project context and system prompt sent with every recording"/>
+
+      <separator/>
+
+      <action
+          id="dev.vox.idea.OpenSettingsAction"
+          class="dev.vox.idea.OpenSettingsAction"
+          text="Settings…"
+          icon="AllIcons.General.Settings"
+          description="Open the Vox settings page"/>
+    </group>
   </actions>
 </idea-plugin>

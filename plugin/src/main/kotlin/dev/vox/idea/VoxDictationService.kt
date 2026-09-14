@@ -17,8 +17,9 @@ import java.awt.datatransfer.StringSelection
 /**
  * Owns the dictation state machine for one project: idle -> recording -> sending -> idle.
  *
- * Every method here runs on the EDT; only the HTTP round trip and the microphone loop leave it.
- * A failure always returns the state to idle, so a broken backend can never leave the trigger stuck.
+ * Every method here runs on the EDT; only the HTTP round trip, the session-file read and the
+ * microphone loop leave it. A failure always returns the state to idle, so a broken backend can
+ * never leave the trigger stuck.
  */
 @Service(Service.Level.PROJECT)
 class VoxDictationService(private val project: Project) {
@@ -55,7 +56,8 @@ class VoxDictationService(private val project: Project) {
 
     private fun start() {
         val settings = VoxSettings.getInstance()
-        val started = AudioRecorder(settings.maxRecordingSeconds(), ::onLimitReached)
+        val started =
+            AudioRecorder(settings.maxRecordingSeconds(), settings.inputDeviceName(), ::onLimitReached)
         try {
             started.start()
         } catch (e: AudioCaptureException) {
@@ -80,6 +82,7 @@ class VoxDictationService(private val project: Project) {
     private fun stopAndSend() {
         val active = recorder ?: return
         recorder = null
+        val device = active.openedDevice
         val audio =
             try {
                 active.stop()
@@ -93,30 +96,45 @@ class VoxDictationService(private val project: Project) {
             return
         }
         setStatus(Status.SENDING)
-        send(audio, VoxSettings.getInstance())
+        send(audio, device, VoxSettings.getInstance())
     }
 
-    private fun send(audio: RecordedAudio, settings: VoxSettings) {
+    private fun send(audio: RecordedAudio, device: String, settings: VoxSettings) {
         val client = VoxClient(settings.baseUrl(), settings.requestTimeout())
-        val mode = settings.mode()
         val maxProjectBytes = settings.maxProjectBytes()
+        val language = settings.language()
+        val wantsContext = settings.sendClaudeContext()
+        val exchanges = settings.contextExchanges()
+        val maxContextBytes = settings.maxContextBytes()
         val clientVersion = pluginVersion()
         ProgressManager.getInstance()
             .run(
                 object : Task.Backgroundable(project, "Vox: Transcribing", false) {
                     private var result: ProcessResult? = null
                     private var failure: String? = null
+                    private var contextExchanges = 0
 
                     override fun run(indicator: ProgressIndicator) {
                         indicator.isIndeterminate = true
-                        val context = ProjectContext.read(project, maxProjectBytes)
+                        val projectFile = ProjectContext.read(project, maxProjectBytes)
+                        val conversation =
+                            if (wantsContext) {
+                                ClaudeCodeContext.read(project, exchanges, maxContextBytes)
+                            } else {
+                                null
+                            }
+                        contextExchanges = conversation?.exchanges ?: 0
+                        if (conversation != null) {
+                            log.debug("sending ${conversation.exchanges} exchanges from session ${conversation.sessionId}")
+                        }
                         val request =
                             ProcessRequest(
                                 wav = audio.wav,
                                 audioSeconds = audio.seconds,
-                                mode = mode,
-                                project = context?.text,
-                                projectName = context?.name,
+                                project = projectFile?.text,
+                                projectName = projectFile?.name,
+                                context = conversation?.text,
+                                language = language,
                                 clientVersion = clientVersion,
                             )
                         result =
@@ -138,21 +156,54 @@ class VoxDictationService(private val project: Project) {
                         val finished = result
                         if (finished != null) log.info("request ${finished.requestId} took ${finished.totalMs} ms")
                         when {
-                            finished != null && finished.output.isNotBlank() -> deliver(finished.output)
-                            finished != null -> VoxNotifications.warn(project, "the backend returned no text")
-                            else -> VoxNotifications.error(project, failure ?: "the request failed")
+                            finished != null && finished.output.isNotBlank() ->
+                                deliver(finished, language, device, contextExchanges)
+                            finished != null -> {
+                                record(finished.transcript, "", language, device, contextExchanges, "", "the backend returned no text")
+                                VoxNotifications.warn(project, "the backend returned no text")
+                            }
+                            else -> {
+                                val reason = failure ?: "the request failed"
+                                record("", "", language, device, contextExchanges, "", reason)
+                                VoxNotifications.error(project, reason)
+                            }
                         }
                     }
                 }
             )
     }
 
-    private fun deliver(text: String) {
+    private fun deliver(result: ProcessResult, language: String, device: String, exchanges: Int) {
         val wantsTerminal = VoxSettings.getInstance().insertIntoTerminal()
-        if (wantsTerminal && TerminalInserter.insert(project, text)) return
-        CopyPasteManager.getInstance().setContents(StringSelection(text))
-        val reason = if (wantsTerminal) "no terminal tab to type into - the result is " else "the result is "
-        VoxNotifications.info(project, reason + "on the clipboard")
+        val intoTerminal = wantsTerminal && TerminalInserter.insert(project, result.output)
+        if (!intoTerminal) {
+            CopyPasteManager.getInstance().setContents(StringSelection(result.output))
+            val reason = if (wantsTerminal) "no terminal tab to type into - the result is " else "the result is "
+            VoxNotifications.info(project, reason + "on the clipboard")
+        }
+        val delivery = if (intoTerminal) "terminal" else "clipboard"
+        record(result.transcript, result.output, language, device, exchanges, delivery, null)
+    }
+
+    private fun record(
+        transcript: String,
+        output: String,
+        language: String,
+        device: String,
+        exchanges: Int,
+        delivery: String,
+        error: String?,
+    ) {
+        VoxTranscriptStore.getInstance(project)
+            .add(
+                transcript = transcript,
+                output = output,
+                language = language,
+                device = device.ifBlank { AudioRecorder.DEFAULT_DEVICE_LABEL },
+                contextExchanges = exchanges,
+                delivery = delivery,
+                error = error,
+            )
     }
 
     private fun setStatus(next: Status) {

@@ -44,13 +44,21 @@ Settings | Plugins | gear icon | Install Plugin from Disk…, pick the zip, rest
 
 ## Using it
 
-| Action                | Default shortcut     | What it does                                         |
-|-----------------------|----------------------|------------------------------------------------------|
-| Vox: Dictate          | Ctrl+Alt+Shift+D     | First press starts recording, second press sends it  |
-| Vox: Cancel Dictation | Ctrl+Alt+Shift+X     | Throws the running recording away                    |
+Everything lives in one submenu, **Tools | Vox**:
 
-Both actions are in the Tools menu, and the status bar widget (`Vox`, `Vox ● REC`, `Vox …`) shows the
-state; clicking it is the same as Vox: Dictate. Rebind either action in Settings | Keymap.
+| Action                        | Default shortcut     | What it does                                        |
+|-------------------------------|----------------------|-----------------------------------------------------|
+| Dictate                       | Ctrl+Alt+Shift+D     | First press starts recording, second press sends it |
+| Cancel Dictation              | Ctrl+Alt+Shift+X     | Throws the running recording away                   |
+| Transcripts and Prompt Bench  | Ctrl+Alt+Shift+T     | Opens the stored transcripts and the prompt bench   |
+| Edit Project Context…         | none                 | Opens `.vox.md`, creating it from a template        |
+| Settings…                     | none                 | Opens Settings \| Tools \| Vox directly             |
+
+The status bar widget (`Vox`, `Vox ● REC`, `Vox …`) shows the state; clicking it is the same as
+Dictate. Rebind any of them in Settings | Keymap.
+
+Vox: Dictate also swaps its own icon between a plain microphone and a recording-coloured one while
+it is capturing, so the toolbar or menu entry reflects the state without reading the text.
 
 Ctrl+Alt+Shift+V, the shortcut this plugin was originally meant to use, is already the IDE's own
 `EditorPasteSimple` ("Paste as Plain Text") in the default keymap, so D (dictate) and X (discard)
@@ -81,27 +89,100 @@ which is part of the platform, and Vox writes to its `TtyConnector` directly.
 
 Settings | Tools | Vox, stored per application in `vox.xml`:
 
-| Setting                  | Default                 | Meaning                                              |
-|--------------------------|-------------------------|------------------------------------------------------|
-| Backend URL              | `http://127.0.0.1:8765` | Root of the Vox backend                              |
-| Mode                     | `context`               | `dictation`, `clean`, `task` or `context`            |
-| Request timeout          | 180 s                   | Whole `/v1/process` round trip; connect is fixed at 3 s |
-| Max recording            | 120 s                   | The recording stops itself and is sent at the cap    |
-| Max `.vox.md` size       | 8000 bytes              | Larger files are truncated on a line boundary        |
-| Type into terminal       | on                      | Off means always use the clipboard                   |
+| Setting                  | Default                 | Meaning                                                 |
+|--------------------------|-------------------------|---------------------------------------------------------|
+| Backend URL              | `http://127.0.0.1:8765` | Root of the Vox backend                                 |
+| Request timeout          | 180 s                   | Whole `/v1/process` round trip; connect is fixed at 3 s  |
+| Microphone               | System default          | Matched by name, so a device index never goes stale      |
+| Max recording            | 120 s                   | The recording stops itself and is sent at the cap        |
+| Answer language          | English                 | The language the finished message is written in          |
+| Type into terminal       | on                      | Off means always use the clipboard                       |
+| Max `.vox.md` size       | 8000 bytes              | Larger files are truncated on a line boundary            |
+| Send Claude Code context | on                      | Attaches the recent conversation of this project         |
+| Exchanges to send        | 3                       | How many request/reply pairs are attached                |
+| Max conversation size    | 6000 bytes              | Oldest exchanges are dropped first                       |
 
 "Test Connection" calls `GET /health` and reports the backend status, the speech model and its
 device, and the language model.
 
+## Transcripts and the prompt bench
+
+The Vox tool window is both the history and a bench for working on prompts.
+
+**The store.** Every dictation is kept: the raw transcript, the message that was actually sent, the
+language, the microphone it came from and how many exchanges of context went with it. Only the
+finished message reaches the terminal, so this is where the transcript survives, and it is what
+makes a bad rewrite diagnosable without switching the backend's file tracing on. It persists across
+IDE restarts in the project's own IDE state (`vox-transcripts.xml`), newest 200 kept - deliberately
+not in the repository, because these are transcripts of everything you said and they have no
+business in git.
+
+**The bench.** Pick a stored transcript and press Run: it goes to `POST /v1/transform`, which runs
+the same prompts, the same glossary and the same model a real dictation would, with no microphone
+involved. The transcript is editable, so a word can be changed and the effect seen immediately.
+Three things are yours to choose:
+
+| Control | Effect |
+|---|---|
+| Prompt: Task / Dictation | Which of the two backend prompts runs - the same choice `/v1/process` and `/v1/dictate` make by path |
+| Language | The `## LANGUAGE` section the prompt renders, and the glossary column it uses |
+| `.vox.md` | Whether the project file is sent, so its effect on the answer can be isolated |
+
+A replay is never stored. The bench answers "what would this prompt have done", and writing that
+back would corrupt the record of what actually happened.
+
+The prompts themselves stay on the backend. The plugin only chooses which one to apply, so there is
+no second copy of the prompt text, the glossary or the language blocks to keep in sync - edit
+`prompt.md` or `dictation.md`, restart the backend, and press Run again.
+
+## Microphone
+
+Mono 16-bit signed little-endian PCM, at the first rate the mixer accepts out of 16 kHz, 48 kHz and
+44.1 kHz, wrapped in a RIFF/WAVE file that only ever exists in memory. Nothing is ever written to
+disk.
+
+The device is stored by name rather than by index, because an index means nothing across restarts
+and nothing at all across sound stacks - the Windows companion configures the same microphone
+through PortAudio in `config/client.yaml`, whose indices do not match Java Sound's. A name works in
+both, so the same string in either configuration picks the same microphone. An exact name wins;
+failing that the first input device whose name contains the configured text is used, and a device
+that is gone falls back to the system default rather than failing the recording.
+
+## Answer language
+
+The picker sets the language the finished message is written in, defaulting to English. It is sent
+as the `language` field and selects the matching `## LANGUAGE` section of the backend's prompt file
+and the matching column of the glossary.
+
+What you speak is recognised independently, under the backend's own `STT_LANGUAGE`, so dictating in
+Russian with the answer set to English keeps working - that combination is the point. Adding a
+language is an edit to `prompt.md`, `dictation.md` and `config/glossary.yaml`, not to this plugin.
+
 ## Project context
 
-When `<project root>/.vox.md` exists, its text is sent with every request in the `project` field of
-`POST /v1/process`, truncated to the configured byte budget on a line boundary; the project name
-goes with it in `project_name`, which the backend uses for logging only. The plugin reads that one
-file and nothing else: the repository never leaves the machine, and the backend never reads it.
+When `<project root>/.vox.md` exists, its text is sent with every request in the `project` field,
+truncated to the configured byte budget on a line boundary; the project name goes with it in
+`project_name`, which the backend uses for logging only.
 
-## Audio
+The backend splits that file in two. A `## SYSTEM` section becomes instructions layered on top of
+the built-in prompt - say how the answer should be shaped, and it is honoured over the prompt's own
+format rules, though it can never make the model invent content that was not spoken. Everything
+else is project context: vocabulary, constraints and worked examples. A file with no `## SYSTEM`
+header is all context, exactly as before.
 
-Mono 16-bit signed little-endian PCM from the default input device, at the first rate the mixer
-accepts out of 16 kHz, 48 kHz and 44.1 kHz, wrapped in a RIFF/WAVE file that only ever exists in
-memory. Nothing is ever written to disk.
+Tools | Vox: Edit Project Context… opens the file, writing a commented template first when the
+project has none.
+
+## Claude Code context
+
+With "Send the recent Claude Code conversation" on, the plugin attaches the last few exchanges of
+this project's newest Claude Code session, so a dictated request can say "this method" or "what we
+just discussed" and still be understood. The backend puts it in a `<conversation>` block that the
+prompt is explicit about: it is there to resolve references, and no task or requirement may be
+taken from it.
+
+Sessions are read from
+`~/.claude/projects/<project path with ":" "\" and "/" replaced by "-">/<session id>.jsonl`, newest
+file first, and only the tail is parsed. Tool calls, tool results, sidechains and hook output are
+skipped; only what a person typed and what the assistant wrote back is kept. Reading only - Vox
+never writes to those files. A project Claude Code has never run in simply sends no context.

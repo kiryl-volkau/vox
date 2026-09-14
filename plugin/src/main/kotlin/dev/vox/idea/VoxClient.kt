@@ -22,20 +22,46 @@ class VoxException(message: String, cause: Throwable? = null) : RuntimeException
 class ProcessRequest(
     val wav: ByteArray,
     val audioSeconds: Double,
-    val mode: String,
     val project: String?,
     val projectName: String?,
+    val context: String?,
+    val language: String,
     val clientVersion: String,
 )
 
-class ProcessResult(val requestId: String, val output: String, val totalMs: Int)
+class ProcessResult(
+    val requestId: String,
+    val transcript: String,
+    val output: String,
+    val totalMs: Int,
+)
+
+/** Replaying one already-transcribed text through a prompt, with no microphone involved. */
+class TransformRequest(
+    val text: String,
+    val dictation: Boolean,
+    val language: String,
+    val project: String?,
+    val context: String?,
+)
+
+class TransformResult(val requestId: String, val output: String, val totalMs: Int)
 
 class HealthResult(
     val status: String,
+    val sttReady: Boolean,
     val sttModel: String,
     val sttDevice: String,
+    val sttError: String,
+    val llmReady: Boolean,
     val llmModel: String,
-)
+    val llmBaseUrl: String,
+    val llmError: String,
+) {
+    /** True when the backend can serve a dictation end to end right now. */
+    val usable: Boolean
+        get() = status == "ready" && sttReady && llmReady
+}
 
 /**
  * The Vox HTTP contract: `POST /v1/process` (multipart) and `GET /health`.
@@ -62,8 +88,38 @@ class VoxClient(private val baseUrl: String, private val requestTimeout: Duratio
         val body = send(httpRequest)
         return ProcessResult(
             requestId = body.stringOrEmpty("request_id"),
+            transcript = body.stringOrEmpty("transcript"),
             output = body.stringOrEmpty("output"),
             totalMs = body.getAsJsonObject("timings_ms")?.get("total")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0,
+        )
+    }
+
+    /**
+     * Runs ``text`` through a prompt again, skipping speech recognition entirely.
+     *
+     * This is what the workbench drives: the prompts, the glossary and the model all stay on
+     * the backend, so replaying a transcript exercises exactly the pipeline a real dictation
+     * would, minus the microphone.
+     */
+    fun transform(request: TransformRequest): TransformResult {
+        val body = JsonObject().apply {
+            addProperty("text", request.text)
+            addProperty("dictation", request.dictation)
+            addProperty("language", request.language)
+            request.project?.let { addProperty("project", it) }
+            request.context?.let { addProperty("context", it) }
+        }
+        val httpRequest =
+            HttpRequest.newBuilder(uri("/v1/transform"))
+                .timeout(requestTimeout)
+                .header("Content-Type", "application/json; charset=utf-8")
+                .POST(HttpRequest.BodyPublishers.ofString(body.toString(), StandardCharsets.UTF_8))
+                .build()
+        val response = send(httpRequest)
+        return TransformResult(
+            requestId = response.stringOrEmpty("request_id"),
+            output = response.stringOrEmpty("output"),
+            totalMs = response.getAsJsonObject("timings_ms")?.get("total")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0,
         )
     }
 
@@ -75,9 +131,14 @@ class VoxClient(private val baseUrl: String, private val requestTimeout: Duratio
         val llm = body.getAsJsonObject("llm")
         return HealthResult(
             status = body.stringOrEmpty("status"),
+            sttReady = stt?.booleanOrFalse("ready") ?: false,
             sttModel = stt?.stringOrEmpty("model").orEmpty(),
             sttDevice = stt?.stringOrEmpty("device").orEmpty(),
+            sttError = stt?.stringOrEmpty("error").orEmpty(),
+            llmReady = llm?.booleanOrFalse("ready") ?: false,
             llmModel = llm?.stringOrEmpty("model").orEmpty(),
+            llmBaseUrl = llm?.stringOrEmpty("base_url").orEmpty(),
+            llmError = llm?.stringOrEmpty("error").orEmpty(),
         )
     }
 
@@ -133,13 +194,14 @@ class VoxClient(private val baseUrl: String, private val requestTimeout: Duratio
         body.writeAscii("\r\n")
         val fields =
             linkedMapOf(
-                "mode" to request.mode,
                 "audio_seconds" to "%.3f".format(java.util.Locale.ROOT, request.audioSeconds),
                 "client_id" to VOX_CLIENT_ID,
                 "client_version" to request.clientVersion,
+                "language" to request.language,
             )
         request.project?.let { fields["project"] = it }
         request.projectName?.let { fields["project_name"] = it }
+        request.context?.let { fields["context"] = it }
         for ((name, value) in fields) {
             body.writeAscii("--$boundary\r\n")
             body.writeAscii("Content-Disposition: form-data; name=\"$name\"\r\n\r\n")
@@ -158,6 +220,11 @@ class VoxClient(private val baseUrl: String, private val requestTimeout: Duratio
         return if (member.isJsonPrimitive) member.asString else ""
     }
 
+    private fun JsonObject.booleanOrFalse(name: String): Boolean {
+        val member = get(name) ?: return false
+        return member.isJsonPrimitive && member.asJsonPrimitive.isBoolean && member.asBoolean
+    }
+
     private companion object {
         val CONNECT_TIMEOUT: Duration = Duration.ofSeconds(3)
         val HEALTH_TIMEOUT: Duration = Duration.ofSeconds(10)
@@ -165,7 +232,6 @@ class VoxClient(private val baseUrl: String, private val requestTimeout: Duratio
 
         val ERROR_MESSAGES =
             mapOf(
-                "unknown_mode" to "unknown mode",
                 "empty_audio" to "no audio was captured",
                 "audio_too_large" to "the recording is too long",
                 "empty_transcript" to "nothing was recognised",
