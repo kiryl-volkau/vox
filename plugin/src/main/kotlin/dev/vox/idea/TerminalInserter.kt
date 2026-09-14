@@ -1,8 +1,5 @@
 package dev.vox.idea
 
-import com.intellij.ide.DataManager
-import com.intellij.openapi.actionSystem.DataKey
-import com.intellij.openapi.actionSystem.UiDataProvider
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.project.Project
@@ -27,8 +24,6 @@ import java.lang.reflect.Method
  */
 internal object TerminalInserter {
 
-    private const val TOOL_WINDOW_ID = "Terminal"
-    private val TERMINAL_VIEW_KEY: DataKey<Any> = DataKey.create("TerminalView")
     private val log = logger<TerminalInserter>()
 
     /** Call on the EDT. Returns true only when the text really reached a terminal. */
@@ -43,7 +38,8 @@ internal object TerminalInserter {
         }
 
     private fun insertIntoSelectedTab(project: Project, text: String): Boolean {
-        val toolWindow = ToolWindowManager.getInstance(project).getToolWindow(TOOL_WINDOW_ID) ?: return false
+        val toolWindow = ToolWindowManager.getInstance(project).getToolWindow(TerminalTabs.TOOL_WINDOW_ID)
+            ?: return false
         val content = toolWindow.contentManager.selectedContent ?: return false
         val sent = sendToReworkedTerminal(content, text) || sendToClassicTerminal(content, text)
         if (sent && !toolWindow.isVisible) toolWindow.show(null)
@@ -68,21 +64,11 @@ internal object TerminalInserter {
         return true
     }
 
-    private fun findTerminalView(content: Content): Any? {
-        val dataManager = DataManager.getInstance()
-        return componentsOf(content.component)
-            .filterIsInstance<UiDataProvider>()
-            .mapNotNull { TERMINAL_VIEW_KEY.getData(dataManager.getDataContext(it as Component)) }
-            .firstOrNull()
-    }
+    private fun findTerminalView(content: Content): Any? = TerminalTabs.terminalView(content)
 
-    private fun componentsOf(root: Component): Sequence<Component> =
-        sequence {
-            yield(root)
-            if (root is Container) root.components.forEach { yieldAll(componentsOf(it)) }
-        }
+    private fun componentsOf(root: Component): Sequence<Component> = TerminalTabs.componentsOf(root)
 
-    private fun call(target: Any, name: String): Any? = publicMethod(target, name)?.invoke(target)
+    private fun call(target: Any, name: String): Any? = TerminalTabs.call(target, name)
 
     private fun callSend(target: Any, name: String, text: String): Boolean {
         val method = publicMethod(target, name, String::class.java) ?: return false
@@ -90,20 +76,6 @@ internal object TerminalInserter {
         return result !is Boolean || result
     }
 
-    /**
-     * The method as declared by a public type, so reflection is not blocked by an implementation
-     * class the terminal plugin keeps internal.
-     */
-    private fun publicMethod(target: Any, name: String, vararg parameters: Class<*>): Method? {
-        for (type in publicTypesOf(target.javaClass)) {
-            val method = runCatching { type.getMethod(name, *parameters) }.getOrNull()
-            if (method != null) return method
-        }
-        return null
-    }
-
-    private fun publicTypesOf(type: Class<*>): Sequence<Class<*>> =
-        generateSequence(type) { it.superclass }
-            .flatMap { sequenceOf(it) + it.interfaces.asSequence() }
-            .filter { java.lang.reflect.Modifier.isPublic(it.modifiers) }
+    private fun publicMethod(target: Any, name: String, vararg parameters: Class<*>): Method? =
+        TerminalTabs.publicMethod(target, name, *parameters)
 }

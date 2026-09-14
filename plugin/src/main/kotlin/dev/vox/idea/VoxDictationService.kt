@@ -36,10 +36,26 @@ class VoxDictationService(private val project: Project) {
 
     private var recorder: AudioRecorder? = null
 
-    /** Starts recording, or stops the running recording and sends it to the backend. */
-    fun toggle() {
+    /**
+     * The shell of the terminal tab this recording belongs to, captured when it started.
+     *
+     * Taken at the start rather than at the send, because the tab the person was looking at when
+     * they began speaking is the one they meant - focus may well have moved by the time they stop.
+     */
+    private var tabShellPid: Long? = null
+
+    /**
+     * Starts recording, or stops the running recording and sends it to the backend.
+     *
+     * [shellPid] names the terminal tab the request belongs to. The in-terminal button passes its
+     * own tab; a keyboard trigger passes nothing and the selected tab is used instead.
+     */
+    fun toggle(shellPid: Long? = null) {
         when (status) {
-            Status.IDLE -> start()
+            Status.IDLE -> {
+                tabShellPid = shellPid ?: TerminalTabs.selectedShellPid(project)
+                start()
+            }
             Status.RECORDING -> stopAndSend()
             Status.SENDING -> VoxNotifications.info(project, "still working on the previous recording")
         }
@@ -50,6 +66,7 @@ class VoxDictationService(private val project: Project) {
         if (status != Status.RECORDING) return
         recorder?.cancel()
         recorder = null
+        tabShellPid = null
         setStatus(Status.IDLE)
         VoxNotifications.info(project, "dictation cancelled")
     }
@@ -107,6 +124,7 @@ class VoxDictationService(private val project: Project) {
         val exchanges = settings.contextExchanges()
         val maxContextBytes = settings.maxContextBytes()
         val clientVersion = pluginVersion()
+        val shellPid = if (wantsContext) tabShellPid else null
         ProgressManager.getInstance()
             .run(
                 object : Task.Backgroundable(project, "Vox: Transcribing", false) {
@@ -119,13 +137,17 @@ class VoxDictationService(private val project: Project) {
                         val projectFile = ProjectContext.read(project, maxProjectBytes)
                         val conversation =
                             if (wantsContext) {
-                                ClaudeCodeContext.read(project, exchanges, maxContextBytes)
+                                ClaudeCodeContext.read(project, exchanges, maxContextBytes, shellPid)
                             } else {
                                 null
                             }
                         contextExchanges = conversation?.exchanges ?: 0
                         if (conversation != null) {
-                            log.debug("sending ${conversation.exchanges} exchanges from session ${conversation.sessionId}")
+                            val how = if (conversation.resolvedFromTerminal) "resolved from the tab" else "guessed by mtime"
+                            log.debug(
+                                "sending ${conversation.exchanges} exchanges from session " +
+                                    "${conversation.sessionName ?: conversation.sessionId} ($how)"
+                            )
                         }
                         val request =
                             ProcessRequest(

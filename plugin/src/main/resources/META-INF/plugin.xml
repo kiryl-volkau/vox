@@ -84,4 +84,11 @@
           description="Open the Vox settings page"/>
     </group>
   </actions>
+  <projectListeners>
+    <!-- Puts the dictate button and the resolved session name into every terminal tab. -->
+    <listener
+        class="dev.vox.idea.VoxTerminalBar"
+        topic="com.intellij.openapi.wm.ex.ToolWindowManagerListener"/>
+  </projectListeners>
+
 </idea-plugin>

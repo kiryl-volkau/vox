@@ -33,28 +33,59 @@ internal object ClaudeCodeContext {
     private class Exchange(val request: String, val reply: String)
 
     /** The conversation Vox will send, plus what it was drawn from. */
-    class Conversation(val text: String, val exchanges: Int, val sessionId: String)
+    class Conversation(
+        val text: String,
+        val exchanges: Int,
+        val sessionId: String,
+        /** What the registry calls this session, when it was identified by its terminal. */
+        val sessionName: String? = null,
+        /** False when the session was guessed from timestamps rather than resolved from the tab. */
+        val resolvedFromTerminal: Boolean = false,
+    )
 
     /**
-     * Reads the last [exchanges] request/reply pairs of this project's newest session.
+     * Reads the last [exchanges] request/reply pairs of the session this dictation belongs to.
+     *
+     * [shellPid] is the pid of the shell in the terminal tab being dictated into, and it is what
+     * makes the answer right when a project has several sessions open: they all append to the same
+     * directory, so picking the newest-modified transcript picks whichever session answered last
+     * rather than the one in front of the user. Pass null, or let the resolution fail, and it falls
+     * back to that older guess - worse, but what it always did.
      *
      * Returns null when Claude Code has never run here, when the session holds nothing usable, or
      * when either budget is zero. The result is capped at [maxBytes] UTF-8 bytes by dropping whole
      * exchanges from the oldest end, so the newest turn - the one the speech is most likely to
      * refer to - is the last thing dropped.
      *
-     * Does no VFS work and blocks on file I/O, so it belongs on a background thread.
+     * Does no VFS work and blocks on file I/O and process enumeration, so it belongs on a
+     * background thread.
      */
-    fun read(project: Project, exchanges: Int, maxBytes: Int): Conversation? {
+    fun read(project: Project, exchanges: Int, maxBytes: Int, shellPid: Long? = null): Conversation? {
         if (exchanges <= 0 || maxBytes <= 0) return null
         val base = project.basePath ?: return null
-        val session = newestSession(base) ?: return null
+        val resolved = shellPid?.let { ClaudeSessions.forShell(it) }
+        val session = resolved?.let { transcriptOf(it, base) } ?: newestSession(base) ?: return null
         val collected = readExchanges(session, exchanges) ?: return null
         if (collected.isEmpty()) return null
         val kept = fit(collected, maxBytes)
         if (kept.isEmpty()) return null
         val text = kept.joinToString("\n\n") { "user: ${it.request}\nassistant: ${it.reply}" }
-        return Conversation(text, kept.size, session.fileName.toString().removeSuffix(SESSION_SUFFIX))
+        val id = session.fileName.toString().removeSuffix(SESSION_SUFFIX)
+        val matched = resolved?.takeIf { it.id == id }
+        return Conversation(text, kept.size, id, matched?.name, matched != null)
+    }
+
+    /**
+     * The transcript of an identified session, or null when it is not where it should be.
+     *
+     * The directory comes from the session's own working directory rather than from the project
+     * root: a session started after a `cd` into a subdirectory writes somewhere else entirely, and
+     * the project root would find nothing. [base] covers an entry that does not say.
+     */
+    private fun transcriptOf(session: ClaudeSessions.Session, base: String): Path? {
+        val directory = sessionDirectory(session.workingDirectory ?: base) ?: return null
+        val file = directory.resolve(session.id + SESSION_SUFFIX)
+        return file.takeIf { it.isRegularFile() && Files.size(it) in 1..MAX_SESSION_BYTES }
     }
 
     /** True when this project has a Claude Code session directory at all. */

@@ -215,10 +215,37 @@ prompt is explicit about: it is there to resolve references, and no task or requ
 taken from it.
 
 Sessions are read from
-`~/.claude/projects/<project path with ":" "\" and "/" replaced by "-">/<session id>.jsonl`, newest
-file first, and only the tail is parsed. Tool calls, tool results, sidechains and hook output are
-skipped; only what a person typed and what the assistant wrote back is kept. Reading only - Vox
-never writes to those files. A project Claude Code has never run in simply sends no context.
+`~/.claude/projects/<project path with ":" "\" and "/" replaced by "-">/<session id>.jsonl`, and only
+the tail is parsed. Tool calls, tool results, sidechains and hook output are skipped; only what a
+person typed and what the assistant wrote back is kept. Reading only - Vox never writes to those
+files. A project Claude Code has never run in simply sends no context.
+
+### Which session, when several are open
+
+Run Claude Code in three terminal tabs of one project and all three append to that same directory,
+so "the newest file" is whichever session answered last - not the one being dictated into. Vox
+resolves the tab instead:
+
+```
+terminal tab -> its shell pid -> the claude process descended from that shell
+             -> ~/.claude/sessions/<pid>.json -> sessionId -> the transcript
+```
+
+Claude Code registers every running session in `~/.claude/sessions/<pid>.json`, which is how
+sessions find each other, and the entry carries the session id, the working directory and
+`procStart` - the process start time, matched against the live process so a recycled pid cannot
+resolve to a dead session's transcript. The tab's shell pid comes from `TerminalStartupOptions`
+on the reworked terminal and from the tty connector's process on the classic one.
+
+None of that file format is published, so every field is optional and any failure - no Claude in
+that tab, no registry, a shape that changed - falls back to the old newest-file guess rather than
+costing the request. Claude Code running inside WSL is the known gap: the process walk stops at
+`wsl.exe` and the registry lives in the WSL home.
+
+The resolved session is shown in the terminal tab itself, next to a **Dictate** button that Vox
+adds to every tab. The button is the unambiguous trigger - it passes its own tab, where the
+keyboard shortcut has to infer the tab from the selection - and the name beside it is there so a
+wrong answer is visible before the request goes out instead of after it comes back strange.
 
 ## Releasing
 
