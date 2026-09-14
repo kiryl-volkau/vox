@@ -724,8 +724,8 @@ room to invent a requirement you never spoke.
 
 That gives one rule. **Write terms, constraints and two or three worked examples. Do not write prose
 about your architecture.** A paragraph explaining that the project is hexagonal with ports and
-adapters buys nothing and is paid for in every generated token afterwards; one line saying "не
-предлагай новые слои и абстракции" changes the output. Names the recogniser mangles, rules you
+adapters buys nothing and is paid for in every generated token afterwards; one line saying "do not
+propose new layers or abstractions" changes the output. Names the recogniser mangles, rules you
 would otherwise repeat in every prompt, and a spoken-to-written example pair earn their tokens.
 Nothing else does.
 
@@ -739,26 +739,26 @@ bytes as a ceiling, not a target: a good `.vox.md` is well under one screen.
 ```markdown
 # Jigward
 
-Spring Boot 3 + PostgreSQL. Новый код на Kotlin, legacy-модули на Java.
+Spring Boot 3 + PostgreSQL. New code in Kotlin, legacy modules in Java.
 
-## Термины
-- Jigward — название проекта. Не «джигвард», не «Джиг-Вард».
-- membership — строка в таблице `user_memberships`. Не «подписка».
-- jig — единица работы планировщика; во множественном числе «jigs».
-- FSM — автомат статусов заказа в `OrderStateMachine`.
+## Terms
+- Jigward - the name of the project. Never "джигвард", never "Джиг-Вард".
+- membership - a row in the `user_memberships` table. Not "подписка".
+- jig - one unit of scheduler work; the plural is "jigs".
+- FSM - the order status machine in `OrderStateMachine`.
 
-## Ограничения
-- Не предлагай новые слои, порты, адаптеры, фабрики и рефакторинги.
-- Миграции только Flyway: `db/migration/V<N>__<name>.sql`.
-- Тесты — JUnit 5 + Testcontainers, репозитории не мокаем.
+## Constraints
+- Do not propose new layers, ports, adapters, factories or refactorings.
+- Migrations are Flyway only: `db/migration/V<N>__<name>.sql`.
+- Tests are JUnit 5 + Testcontainers; repositories are never mocked.
 
-## Примеры
-- сказано: «тут мембершип второй раз достаётся»
-  нужно:   «В текущем сервисе membership загружается второй раз.»
-- сказано: «добавь миграцию на индекс по юзер айди и статусу»
-  нужно:   «Добавь Flyway-миграцию с составным индексом по (user_id, status).»
-- сказано: «проверь реально ли нужен этот джиг»
-  нужно:   «Проверь, нужен ли этот jig.» — вопрос, а не приказ.
+## Examples
+- spoken:  тут мембершип второй раз достаётся
+  written: membership is loaded a second time in the current service.
+- spoken:  добавь миграцию на индекс по юзер айди и статусу
+  written: Add a Flyway migration with a composite index on (user_id, status).
+- spoken:  проверь реально ли нужен этот джиг
+  written: Check whether this jig is really needed. - a question, not an order.
 ```
 
 That is under 1500 bytes - a fifth of the budget - and it is already most of the value. The examples
