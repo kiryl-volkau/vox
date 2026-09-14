@@ -9,7 +9,12 @@ from pathlib import Path
 from .analysis import RESPONSE_FORMAT, Analysis, parse_analysis, with_hint
 from .config import Settings, redacted_base_url
 from .glossary import Glossary
-from .languages import normalise_language
+from .languages import (
+    AUTO_LANGUAGE,
+    FALLBACK_LANGUAGE,
+    detect_language,
+    normalise_language,
+)
 from .llm import LlmError, LlmResponseError, OpenAICompatibleClient, clean_llm_output
 from .models import (
     ProcessResponse,
@@ -147,9 +152,12 @@ class Processor:
         ``dictation`` picks the dictation prompt - punctuation and filler removal only -
         instead of the task prompt. ``language`` is the language the answer must be written
         in; ``None`` means ``settings.default_language``, and it does not change speech
-        recognition. ``project`` is the caller's ``.vox.md``, whose ``## SYSTEM`` section
-        becomes extra system instructions and whose remainder becomes project context, both
-        truncated to ``max_project_bytes``. ``context`` is the recent conversation the caller
+        recognition. "auto" - the default - means the language Whisper heard, so the answer
+        comes back in whatever was spoken without anybody configuring anything.
+
+        ``project`` is the caller's ``.vox.md``, whose ``## SYSTEM`` section becomes extra
+        system instructions and whose remainder becomes project context, both truncated to
+        ``max_project_bytes``. ``context`` is the recent conversation the caller
         chose to send, truncated to ``max_context_bytes``. ``project_name``, ``client_id``,
         ``client_version`` and ``audio_seconds`` are what the caller reported about itself;
         they are only recorded, never acted on. Raises EmptyTranscriptError when nothing was
@@ -162,7 +170,7 @@ class Processor:
             request_id=request_id,
             endpoint="process",
             prompt_kind="dictation" if dictation else "task",
-            output_language=resolved,
+            requested_language=resolved,
             client_id=client_id,
             client_version=client_version,
             client_audio_seconds=audio_seconds,
@@ -181,9 +189,11 @@ class Processor:
                 self._record_stt(trace, result, transcript, transcription_ms)
                 if not transcript:
                     raise EmptyTranscriptError("speech recognition produced an empty transcript")
+                written = self._spoken_language(resolved, result.language)
+                trace.output_language = written
                 llm_started = time.perf_counter()
                 run = await self._run_prompt(
-                    transcript, project, context, trace, dictation=dictation, language=resolved
+                    transcript, project, context, trace, dictation=dictation, language=written
                 )
                 timings = TimingsMs(
                     transcription=transcription_ms,
@@ -270,7 +280,7 @@ class Processor:
             request_id=request_id,
             endpoint="transform",
             prompt_kind="dictation" if dictation else "task",
-            output_language=resolved,
+            requested_language=resolved,
             project_received_bytes=_byte_length(project),
             context_received_bytes=_byte_length(context),
         )
@@ -279,10 +289,12 @@ class Processor:
         try:
             if not source:
                 raise EmptyTranscriptError("no text to transform")
+            written = self._written_language(resolved, source)
+            trace.output_language = written
             async with self._semaphore:
                 llm_started = time.perf_counter()
                 run = await self._run_prompt(
-                    source, project, context, trace, dictation=dictation, language=resolved
+                    source, project, context, trace, dictation=dictation, language=written
                 )
                 llm_ms = _elapsed_ms(llm_started)
             timings = TimingsMs(transcription=0, llm=llm_ms, total=_elapsed_ms(started))
@@ -301,7 +313,30 @@ class Processor:
             self._finish(trace, source)
 
     def _resolve_language(self, language: str | None) -> str:
+        """The language the caller asked for, which may still be "auto"."""
         return normalise_language(language) or self._settings.default_language
+
+    @staticmethod
+    def _spoken_language(requested: str, detected: str) -> str:
+        """Turn a requested "auto" into the language actually spoken.
+
+        ``detected`` is Whisper's own answer for the recording, which is the best evidence
+        there is and costs nothing extra. It is normalised because Whisper reports codes the
+        rest of the pipeline has never seen, and an unreadable one falls back rather than
+        reaching a prompt as a language nobody can write.
+        """
+        if requested != AUTO_LANGUAGE:
+            return requested
+        return normalise_language(detected) or FALLBACK_LANGUAGE
+
+    @staticmethod
+    def _written_language(requested: str, text: str) -> str:
+        """Turn a requested "auto" into a language when there is no recording to ask about.
+
+        ``/v1/transform`` replays text, so the text itself is the only evidence; see
+        :func:`vox_server.languages.detect_language` for how little it claims to tell.
+        """
+        return detect_language(text) if requested == AUTO_LANGUAGE else requested
 
     def _glossary_block(self, language: str) -> str:
         block = self._glossary_blocks.get(language)

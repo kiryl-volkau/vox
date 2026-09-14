@@ -40,7 +40,7 @@ def test_defaults_match_the_documented_contract() -> None:
     assert settings.max_audio_seconds == 300.0
     assert settings.max_project_bytes == 8000
     assert settings.max_context_bytes == 6000
-    assert settings.default_language == "en"
+    assert settings.default_language == "auto"
 
 
 def test_every_field_can_come_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:

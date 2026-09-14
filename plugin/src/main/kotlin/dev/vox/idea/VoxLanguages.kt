@@ -14,10 +14,17 @@ internal object VoxLanguages {
             get() = if (nativeName == englishName) englishName else "$englishName ($nativeName)"
     }
 
-    const val DEFAULT_CODE = "en"
+    /**
+     * Answer in whatever language was spoken. Not a language of its own: the backend turns it
+     * into a real one from Whisper's detection before any prompt sees it.
+     */
+    const val AUTO_CODE = "auto"
+
+    const val DEFAULT_CODE = AUTO_CODE
 
     val ALL =
         listOf(
+            Language(AUTO_CODE, "Auto", "Auto"),
             Language("en", "English", "English"),
             Language("ru", "Russian", "Русский"),
             Language("de", "German", "Deutsch"),
@@ -46,13 +53,15 @@ internal object VoxLanguages {
     fun normalise(value: String?): String? {
         val cleaned = value?.trim().orEmpty()
         if (cleaned.isEmpty()) return null
+        if (cleaned.lowercase() == AUTO_CODE) return AUTO_CODE
         val base = cleaned.replace('_', '-').substringBefore('-').lowercase()
         if (base in byCode) return base
         return base.takeIf { it.length in 2..3 && it.all(Char::isLetter) }
     }
 
     /** The label for [code], falling back to the bare code for a language not in [ALL]. */
-    fun label(code: String): String = byCode[code]?.label ?: code
+    fun label(code: String): String =
+        if (code == AUTO_CODE) "Auto (the language you spoke)" else byCode[code]?.label ?: code
 
     /** [ALL] plus [code] itself when it was configured by hand and is not on the list. */
     fun optionsIncluding(code: String): List<String> {

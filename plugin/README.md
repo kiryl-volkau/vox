@@ -95,7 +95,7 @@ Settings | Tools | Vox, stored per application in `vox.xml`:
 | Request timeout          | 180 s                   | Whole `/v1/process` round trip; connect is fixed at 3 s  |
 | Microphone               | System default          | Matched by name, so a device index never goes stale      |
 | Max recording            | 120 s                   | The recording stops itself and is sent at the cap        |
-| Answer language          | English                 | The language the finished message is written in          |
+| Answer language          | Auto                    | The language of the finished message; Auto follows the speech |
 | Type into terminal       | on                      | Off means always use the clipboard                       |
 | Max `.vox.md` size       | 8000 bytes              | Larger files are truncated on a line boundary            |
 | Send Claude Code context | on                      | Attaches the recent conversation of this project         |
@@ -183,12 +183,15 @@ that is gone falls back to the system default rather than failing the recording.
 
 ## Answer language
 
-The picker sets the language the finished message is written in, defaulting to English. It is sent
-as the `language` field and selects the matching `## LANGUAGE` section of the backend's prompt file
-and the matching column of the glossary.
+The picker sets the language the finished message is written in. It defaults to **Auto**, which
+answers in whatever language you actually spoke - the backend takes that from Whisper's detection
+of the recording, so there is nothing to configure to have Russian come back as Russian. Whatever
+it resolves to selects the matching `## LANGUAGE` section of the backend's prompt file and the
+matching column of the glossary.
 
-What you speak is recognised independently, under the backend's own `STT_LANGUAGE`, so dictating in
-Russian with the answer set to English keeps working - that combination is the point. Adding a
+Picking a real language instead pins it regardless of what was said, and that combination is the
+point of keeping the two separate: what you speak is recognised independently under the backend's
+own `STT_LANGUAGE`, so dictating in Russian with the answer set to English keeps working. Adding a
 language is an edit to `prompt.md`, `dictation.md` and `config/glossary.yaml`, not to this plugin.
 
 ## Project context

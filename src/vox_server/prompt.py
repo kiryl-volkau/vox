@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .languages import DEFAULT_LANGUAGE
+from .languages import FALLBACK_LANGUAGE
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +102,7 @@ class Prompt:
     language_blocks: tuple[tuple[str, str], ...] = ()
 
     def render_system(
-        self, project: ProjectFile, conversation: str = "", language: str = DEFAULT_LANGUAGE
+        self, project: ProjectFile, conversation: str = "", language: str = FALLBACK_LANGUAGE
     ) -> str:
         """Return the system prompt with every context placeholder substituted.
 
@@ -141,11 +141,13 @@ class Prompt:
     def language_block(self, language: str) -> str:
         """Return the instruction paragraph for ``language``.
 
-        Falls back to the default language's block, then to "" when the prompt file declares
-        no language sections at all.
+        Falls back to :data:`FALLBACK_LANGUAGE`'s block, then to "" when the prompt file
+        declares no language sections at all. ``language`` is always a real language here:
+        "auto" is resolved before a prompt is rendered, because a model cannot be told to
+        answer in a language nobody has named.
         """
         blocks = dict(self.language_blocks)
-        return blocks.get(language) or blocks.get(DEFAULT_LANGUAGE, "")
+        return blocks.get(language) or blocks.get(FALLBACK_LANGUAGE, "")
 
 
 def load_prompt(path: Path) -> Prompt:

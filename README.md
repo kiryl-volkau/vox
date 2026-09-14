@@ -689,6 +689,38 @@ Handy for that edit-rebuild-try loop. See [API](#api).
 
 ---
 
+## Output language
+
+Answers come back in the language you spoke. That is `DEFAULT_LANGUAGE=auto`, and it is what a
+request gets when it names no language of its own - no picker to set, no file to edit.
+
+"auto" is not a language anything writes in; it is resolved to a real code before a prompt is
+rendered, because a model cannot be told to answer in a language nobody has named:
+
+| Where | What it resolves from |
+|---|---|
+| `/v1/process`, `/v1/dictate` | Whisper's own detection of the recording, which costs nothing extra because the transcription already reports it |
+| `/v1/transform` | The script of the text, because a replay has no recording to detect from. Any Cyrillic at all reads as Russian |
+| Neither yields anything usable | `en` |
+
+The rule for a replay is deliberately asymmetric rather than a majority of letters. The speech this
+pipeline gets is Russian with English identifiers dropped into it - "добавь migration на index" is
+two thirds Latin by letter count and entirely Russian as a sentence - while English speech
+practically never carries Cyrillic. One Cyrillic word is therefore enough.
+
+Naming a language instead pins it whatever was spoken, which is the whole point of keeping the two
+separate: dictate in Russian, get the task in English, paste it into a repository where everything
+is written in English. The companion and the plugin both offer `Auto` alongside the real languages,
+and `## LANGUAGE <code>` in the prompt files is what decides which languages can actually be
+written well - a code with no section of its own falls back to the English one.
+
+A trace records both halves of the decision, so "asked for auto, wrote Russian" is visible after
+the fact:
+
+```json
+"language": { "requested": "auto", "written": "ru" }
+```
+
 ## Project context - `.vox.md`
 
 A project may keep a `.vox.md` in its root. **It belongs to the project you are talking about, not
@@ -927,8 +959,8 @@ settings stay environment-only, because they are set once and never per launch: 
 the dictation prompt uses instead of `LLM_TEMPERATURE` - see [The prompts](#the-prompts)),
 `MAX_AUDIO_BYTES`, `MAX_AUDIO_SECONDS`, `MAX_PROJECT_BYTES` (8000, the ceiling on project context
 - see [Project context](#project-context---voxmd)), `MAX_CONTEXT_BYTES` (6000, the ceiling on the
-conversation context a client may attach) and `DEFAULT_LANGUAGE` (`en`, the language answers are
-written in when a request asks for no particular one).
+conversation context a client may attach) and `DEFAULT_LANGUAGE` (`auto`, the language answers are
+written in when a request asks for no particular one - see [Output language](#output-language)).
 
 ### Running the backend natively
 
@@ -1233,11 +1265,15 @@ the caller chose to attach so speech can refer to it, truncated at `max_context_
 `client_id` identifies the caller in the logs - `vox-windows` for the companion, `vox-idea` for the
 plugin.
 
-`language` is the language the **answer** is written in, defaulting to `DEFAULT_LANGUAGE` (`en`). It
-is deliberately not the spoken language: speech recognition keeps using `STT_LANGUAGE`, so Russian
-speech can produce an English task. It selects the prompt file's `## LANGUAGE <code>` section and
-the matching spellings in the glossary. On `/v1/transcribe`, which returns speech as recognised and
-never reaches a prompt, `language` means the spoken language instead.
+`language` is the language the **answer** is written in, defaulting to `DEFAULT_LANGUAGE`
+(`auto`). It is deliberately not tied to the spoken language: speech recognition keeps using
+`STT_LANGUAGE`, so Russian speech can produce an English task when you ask for one. It selects the
+prompt file's `## LANGUAGE <code>` section and the matching spellings in the glossary. On
+`/v1/transcribe`, which returns speech as recognised and never reaches a prompt, `language` means
+the spoken language instead.
+
+`"auto"` is resolved before any prompt is rendered - see [Output language](#output-language) - so
+the `language` a response reports is always a real one, never `"auto"`.
 
 `POST /v1/process`:
 

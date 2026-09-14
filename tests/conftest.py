@@ -222,9 +222,14 @@ def make_wav_bytes(
 def make_prompt(
     system_prompt: str = "Ты редактор.",
     user_template: str = "{transcript}",
+    language_blocks: tuple[tuple[str, str], ...] = (),
 ) -> Prompt:
     """Build a Prompt directly, bypassing the markdown parser."""
-    return Prompt(system_prompt=system_prompt, user_template=user_template)
+    return Prompt(
+        system_prompt=system_prompt,
+        user_template=user_template,
+        language_blocks=language_blocks,
+    )
 
 
 def make_processor(

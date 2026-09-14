@@ -58,6 +58,7 @@ class RequestTrace:
     stt_duration_ms: int | None = None
     stt_transcript: str = ""
 
+    requested_language: str | None = None
     output_language: str | None = None
 
     project_name: str | None = None
@@ -127,7 +128,10 @@ class RequestTrace:
             },
             "audio": self._audio_section(),
             "stt": self._stt_section(),
-            "language": self.output_language,
+            "language": {
+                "requested": self.requested_language,
+                "written": self.output_language,
+            },
             "project": self._project_section(),
             "context": self._context_section(),
             "glossary": self._glossary_section(),
