@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -18,14 +17,16 @@ from vox_server.models import (
     TranscribeResponse,
     TransformResponse,
 )
-from vox_server.modes import ModeRegistry, UnknownModeError
-from vox_server.processor import EmptyOutputError, EmptyTranscriptError, Processor
+from vox_server.processor import EmptyTranscriptError, Processor
+from vox_server.prompt import Prompt
 from vox_server.transcription import TranscriptionError
 
 API_KEY = "sk-super-secret-key"
 WAV = b"RIFF----WAVEfmt "
 PROJECT = "Термины: джигвард -> Jigward.\nМиграции уже применены."
-PROJECT_HEADER = "КОНТЕКСТ ПРОЕКТА"
+PROJECT_HEADER = "<project_context>"
+CONVERSATION_MARKER = "БЕСЕДА-МАРКЕР-42"
+CONVERSATION = f"user: {CONVERSATION_MARKER} почини авторизацию\nassistant: починил SecurityConfig"
 MAX_PROJECT_BYTES = 512
 PROJECT_LINES = tuple(
     f"ПРАВИЛО-{index:03d}-НАЧАЛО: не трогай миграции ПРАВИЛО-{index:03d}-КОНЕЦ"
@@ -43,40 +44,46 @@ class FakeProcessor:
     ``projects`` records the project text every project-aware route forwarded, one entry per
     call, so a route that forwards nothing is distinguishable from one that forwards "".
     ``provenance`` records the (project_name, client_id, client_version, audio_seconds) the
-    route reported about its caller.
+    route reported about its caller. ``dictation_calls`` records the ``dictation`` flag each
+    call carried, so /v1/process and /v1/dictate are distinguishable here too. ``contexts``
+    and ``languages`` record the conversation context and the output language per call.
     """
 
     def __init__(self, *, output: str = "Проверь membership.", raises: Exception | None = None):
         self.output = output
         self.raises = raises
-        self.calls: list[tuple[bytes, str, str]] = []
+        self.calls: list[tuple[bytes, str]] = []
         self.projects: list[str] = []
+        self.contexts: list[str | None] = []
+        self.languages: list[str | None] = []
         self.provenance: list[tuple[str | None, str | None, str | None, float | None]] = []
+        self.dictation_calls: list[bool] = []
 
     async def process(
         self,
         audio: bytes,
-        mode_name: str,
         *,
         request_id: str,
+        dictation: bool = False,
         language: str | None = None,
         project: str = "",
         project_name: str | None = None,
+        context: str | None = None,
         client_id: str | None = None,
         client_version: str | None = None,
         audio_seconds: float | None = None,
     ) -> ProcessResponse:
-        del language
-        self.calls.append((audio, mode_name, request_id))
+        self.calls.append((audio, request_id))
         self.projects.append(project)
+        self.contexts.append(context)
+        self.languages.append(language)
         self.provenance.append((project_name, client_id, client_version, audio_seconds))
+        self.dictation_calls.append(dictation)
         if self.raises is not None:
             raise self.raises
         return ProcessResponse(
             request_id=request_id,
-            mode=mode_name,
             transcript="посмотри мембершип",
-            normalized_text=self.output,
             output=self.output,
             language="ru",
             timings_ms=TimingsMs(transcription=120, llm=340, total=470),
@@ -86,7 +93,7 @@ class FakeProcessor:
         self, audio: bytes, *, request_id: str, language: str | None = None
     ) -> TranscribeResponse:
         del language
-        self.calls.append((audio, "transcribe", request_id))
+        self.calls.append((audio, request_id))
         if self.raises is not None:
             raise self.raises
         return TranscribeResponse(
@@ -97,16 +104,24 @@ class FakeProcessor:
         )
 
     async def transform_only(
-        self, text: str, mode_name: str, *, request_id: str, project: str = ""
+        self,
+        text: str,
+        *,
+        request_id: str,
+        dictation: bool = False,
+        project: str = "",
+        context: str | None = None,
+        language: str | None = None,
     ) -> TransformResponse:
-        self.calls.append((text.encode("utf-8"), mode_name, request_id))
+        self.calls.append((text.encode("utf-8"), request_id))
         self.projects.append(project)
+        self.contexts.append(context)
+        self.languages.append(language)
+        self.dictation_calls.append(dictation)
         if self.raises is not None:
             raise self.raises
         return TransformResponse(
             request_id=request_id,
-            mode=mode_name,
-            normalized_text=self.output,
             output=self.output,
             timings_ms=TimingsMs(transcription=0, llm=340, total=340),
         )
@@ -127,13 +142,13 @@ def ready_state(
     settings_factory: Callable[..., Settings],
     transcriber_factory: Callable[..., Any],
     llm_factory: Callable[..., Any],
-    repo_root: Path,
+    prompt_factory: Callable[..., Prompt],
 ) -> ServerState:
     return state_factory(
         settings=settings_factory(llm_api_key=API_KEY),
         transcriber=transcriber_factory(ready=True),
         llm=llm_factory(base_url=f"http://user:{API_KEY}@ollama:11434/v1"),
-        modes=ModeRegistry.load(repo_root / "modes"),
+        prompt=prompt_factory(),
         processor=FakeProcessor(),
         llm_ready=True,
         warming=False,
@@ -236,21 +251,6 @@ def test_health_answers_even_without_any_server_state(app_factory: AppFactory) -
     assert response.json()["status"] == "degraded"
 
 
-def test_modes_lists_what_the_registry_loaded(
-    ready_state: ServerState, app_factory: AppFactory
-) -> None:
-    client = TestClient(app_factory(ready_state))
-
-    body = client.get("/v1/modes").json()
-    names = [mode["name"] for mode in body["modes"]]
-
-    assert names == ["clean", "context", "dictation", "task"]
-    context = next(mode for mode in body["modes"] if mode["name"] == "context")
-    assert context["wrap_for_claude"] is True
-    assert context["requires_llm"] is True
-    assert context["label"]
-
-
 def test_process_returns_the_documented_payload(
     ready_state: ServerState, app_factory: AppFactory
 ) -> None:
@@ -259,41 +259,60 @@ def test_process_returns_the_documented_payload(
     response = client.post(
         "/v1/process",
         files=_upload(),
-        data={"mode": "context", "client_id": "vox-windows", "audio_seconds": "1.25"},
+        data={"client_id": "vox-windows", "audio_seconds": "1.25"},
     )
     body = response.json()
 
     assert response.status_code == 200
     assert set(body) == {
         "request_id",
-        "mode",
         "transcript",
-        "normalized_text",
         "output",
         "language",
         "timings_ms",
     }
-    assert body["mode"] == "context"
     assert body["output"] == "Проверь membership."
     assert set(body["timings_ms"]) == {"transcription", "llm", "total"}
     assert body["request_id"] == response.headers["X-Request-ID"]
     assert len(body["request_id"]) == 12
 
 
-def test_process_forwards_the_uploaded_bytes_and_mode(
+def test_dictate_returns_the_documented_payload(
+    ready_state: ServerState, app_factory: AppFactory
+) -> None:
+    client = TestClient(app_factory(ready_state))
+
+    response = client.post(
+        "/v1/dictate",
+        files=_upload(),
+        data={"client_id": "vox-windows", "audio_seconds": "1.25"},
+    )
+    body = response.json()
+
+    assert response.status_code == 200
+    assert set(body) == {
+        "request_id",
+        "transcript",
+        "output",
+        "language",
+        "timings_ms",
+    }
+    assert body["request_id"] == response.headers["X-Request-ID"]
+
+
+def test_process_forwards_the_uploaded_bytes(
     ready_state: ServerState, app_factory: AppFactory
 ) -> None:
     processor = FakeProcessor()
     client = TestClient(app_factory(_with_processor(ready_state, processor)))
 
-    client.post("/v1/process", files=_upload(b"RIFFabcdWAVEfmt "), data={"mode": "task"})
+    client.post("/v1/process", files=_upload(b"RIFFabcdWAVEfmt "))
 
-    audio, mode, _request_id = processor.calls[0]
+    audio, _request_id = processor.calls[0]
     assert audio == b"RIFFabcdWAVEfmt "
-    assert mode == "task"
 
 
-def test_process_defaults_to_the_context_mode(
+def test_process_tells_the_processor_this_is_not_dictation(
     ready_state: ServerState, app_factory: AppFactory
 ) -> None:
     processor = FakeProcessor()
@@ -301,13 +320,24 @@ def test_process_defaults_to_the_context_mode(
 
     client.post("/v1/process", files=_upload())
 
-    assert processor.calls[0][1] == "context"
+    assert processor.dictation_calls == [False]
+
+
+def test_dictate_tells_the_processor_this_is_dictation(
+    ready_state: ServerState, app_factory: AppFactory
+) -> None:
+    processor = FakeProcessor()
+    client = TestClient(app_factory(_with_processor(ready_state, processor)))
+
+    client.post("/v1/dictate", files=_upload())
+
+    assert processor.dictation_calls == [True]
 
 
 def test_an_empty_upload_is_rejected(ready_state: ServerState, app_factory: AppFactory) -> None:
     client = TestClient(app_factory(ready_state))
 
-    response = client.post("/v1/process", files=_upload(b""), data={"mode": "context"})
+    response = client.post("/v1/process", files=_upload(b""))
 
     assert response.status_code == 400
     assert response.json()["error"] == "empty_audio"
@@ -327,7 +357,7 @@ def test_an_oversized_upload_is_rejected(
     )
     client = TestClient(app_factory(state))
 
-    response = client.post("/v1/process", files=_upload(b"x" * 64), data={"mode": "context"})
+    response = client.post("/v1/process", files=_upload(b"x" * 64))
 
     assert response.status_code == 413
     assert response.json()["error"] == "audio_too_large"
@@ -346,36 +376,16 @@ def test_audio_longer_than_the_limit_is_rejected(
     )
     client = TestClient(app_factory(state))
 
-    response = client.post(
-        "/v1/process", files=_upload(), data={"mode": "context", "audio_seconds": "42"}
-    )
+    response = client.post("/v1/process", files=_upload(), data={"audio_seconds": "42"})
 
     assert response.status_code == 413
     assert response.json()["error"] == "audio_too_large"
-
-
-def test_an_unknown_mode_reports_the_available_modes(
-    ready_state: ServerState, app_factory: AppFactory
-) -> None:
-    unknown = UnknownModeError("bogus", ["clean", "context", "dictation", "task"])
-    state = _with_processor(ready_state, FakeProcessor(raises=unknown))
-    client = TestClient(app_factory(state))
-
-    response = client.post("/v1/process", files=_upload(), data={"mode": "bogus"})
-    body = response.json()
-
-    assert response.status_code == 400
-    assert body["error"] == "unknown_mode"
-    assert body["detail"] is not None
-    assert "bogus" in body["detail"]
-    assert "context" in body["detail"]
 
 
 @pytest.mark.parametrize(
     ("error", "status", "code"),
     [
         (EmptyTranscriptError("nothing"), 422, "empty_transcript"),
-        (EmptyOutputError("nothing"), 502, "empty_llm_output"),
         (TranscriptionError("cuda died"), 503, "stt_unavailable"),
         (LlmTimeoutError("slow"), 504, "llm_timeout"),
         (LlmUnavailableError("down"), 503, "llm_unavailable"),
@@ -392,11 +402,65 @@ def test_domain_errors_map_to_their_documented_status(
     state = _with_processor(ready_state, FakeProcessor(raises=error))
     client = TestClient(app_factory(state))
 
-    response = client.post("/v1/process", files=_upload(), data={"mode": "context"})
+    response = client.post("/v1/process", files=_upload())
 
     assert response.status_code == status
     assert response.json()["error"] == code
     assert response.headers["X-Request-ID"]
+
+
+def test_an_empty_model_reply_falls_back_to_the_transcript_on_process(
+    state_factory: StateFactory,
+    settings_factory: Callable[..., Settings],
+    transcriber_factory: Callable[..., Any],
+    llm_factory: Callable[..., Any],
+    processor_factory: Callable[..., Processor],
+    app_factory: AppFactory,
+) -> None:
+    settings = settings_factory()
+    transcriber = transcriber_factory("посмотри мембершип", ready=True)
+    llm = llm_factory("")
+    state = state_factory(
+        settings=settings,
+        transcriber=transcriber,
+        llm=llm,
+        processor=processor_factory(transcriber, llm, settings=settings),
+        llm_ready=True,
+    )
+    client = TestClient(app_factory(state))
+
+    response = client.post("/v1/process", files=_upload())
+    body = response.json()
+
+    assert response.status_code == 200
+    assert body["output"] == body["transcript"] == "посмотри мембершип"
+
+
+def test_an_empty_model_reply_falls_back_to_the_transcript_on_dictate(
+    state_factory: StateFactory,
+    settings_factory: Callable[..., Settings],
+    transcriber_factory: Callable[..., Any],
+    llm_factory: Callable[..., Any],
+    processor_factory: Callable[..., Processor],
+    app_factory: AppFactory,
+) -> None:
+    settings = settings_factory()
+    transcriber = transcriber_factory("посмотри мембершип", ready=True)
+    llm = llm_factory("   ")
+    state = state_factory(
+        settings=settings,
+        transcriber=transcriber,
+        llm=llm,
+        processor=processor_factory(transcriber, llm, settings=settings),
+        llm_ready=True,
+    )
+    client = TestClient(app_factory(state))
+
+    response = client.post("/v1/dictate", files=_upload())
+    body = response.json()
+
+    assert response.status_code == 200
+    assert body["output"] == body["transcript"] == "посмотри мембершип"
 
 
 def test_an_unexpected_error_becomes_a_bare_internal_error(
@@ -406,7 +470,7 @@ def test_an_unexpected_error_becomes_a_bare_internal_error(
     state = _with_processor(ready_state, exploding)
     client = TestClient(app_factory(state), raise_server_exceptions=False)
 
-    response = client.post("/v1/process", files=_upload(), data={"mode": "context"})
+    response = client.post("/v1/process", files=_upload())
     body = response.json()
 
     assert response.status_code == 500
@@ -426,7 +490,7 @@ def test_process_is_refused_while_stt_is_still_loading(
     )
     client = TestClient(app_factory(state))
 
-    response = client.post("/v1/process", files=_upload(), data={"mode": "context"})
+    response = client.post("/v1/process", files=_upload())
 
     assert response.status_code == 503
     assert response.json()["error"] == "warming"
@@ -445,7 +509,7 @@ def test_process_reports_a_failed_stt_start_once_warming_is_over(
     )
     client = TestClient(app_factory(state))
 
-    response = client.post("/v1/process", files=_upload(), data={"mode": "context"})
+    response = client.post("/v1/process", files=_upload())
 
     assert response.status_code == 503
     assert response.json()["error"] == "stt_unavailable"
@@ -454,7 +518,7 @@ def test_process_reports_a_failed_stt_start_once_warming_is_over(
 def test_requests_before_any_state_exists_are_refused(app_factory: AppFactory) -> None:
     client = TestClient(app_factory())
 
-    response = client.post("/v1/process", files=_upload(), data={"mode": "context"})
+    response = client.post("/v1/process", files=_upload())
 
     assert response.status_code == 503
     assert response.json()["error"] == "warming"
@@ -479,12 +543,49 @@ def test_transform_runs_without_speech_recognition(
     ready_state.transcriber = None
     client = TestClient(app_factory(ready_state))
 
-    response = client.post("/v1/transform", json={"text": "посмотри мембершип", "mode": "clean"})
+    response = client.post("/v1/transform", json={"text": "посмотри мембершип"})
     body = response.json()
 
     assert response.status_code == 200
-    assert body["mode"] == "clean"
     assert body["output"] == "Проверь membership."
+
+
+def test_transform_forwards_the_dictation_flag(
+    ready_state: ServerState, app_factory: AppFactory
+) -> None:
+    processor = FakeProcessor()
+    ready_state.transcriber = None
+    client = TestClient(app_factory(_with_processor(ready_state, processor)))
+
+    client.post("/v1/transform", json={"text": "посмотри мембершип", "dictation": True})
+
+    assert processor.dictation_calls == [True]
+
+
+def test_an_empty_model_reply_falls_back_to_the_source_text_on_transform(
+    state_factory: StateFactory,
+    settings_factory: Callable[..., Settings],
+    transcriber_factory: Callable[..., Any],
+    llm_factory: Callable[..., Any],
+    processor_factory: Callable[..., Processor],
+    app_factory: AppFactory,
+) -> None:
+    settings = settings_factory()
+    llm = llm_factory("")
+    state = state_factory(
+        settings=settings,
+        transcriber=transcriber_factory(),
+        llm=llm,
+        processor=processor_factory(transcriber_factory(), llm, settings=settings),
+        llm_ready=True,
+    )
+    client = TestClient(app_factory(state))
+
+    response = client.post("/v1/transform", json={"text": "посмотри мембершип"})
+    body = response.json()
+
+    assert response.status_code == 200
+    assert body["output"] == "посмотри мембершип"
 
 
 def test_a_malformed_json_body_is_a_validation_error(
@@ -492,7 +593,7 @@ def test_a_malformed_json_body_is_a_validation_error(
 ) -> None:
     client = TestClient(app_factory(ready_state))
 
-    response = client.post("/v1/transform", json={"mode": "clean"})
+    response = client.post("/v1/transform", json={})
     body = response.json()
 
     assert response.status_code == 422
@@ -547,7 +648,6 @@ def test_process_accepts_the_project_form_fields(
         "/v1/process",
         files=_upload(),
         data={
-            "mode": "context",
             "project": PROJECT,
             "project_name": "jigward",
             "client_id": "vox-idea",
@@ -557,6 +657,85 @@ def test_process_accepts_the_project_form_fields(
 
     assert response.status_code == 200
     assert processor.projects == [PROJECT]
+
+
+def test_process_forwards_the_conversation_context_and_the_language(
+    ready_state: ServerState, app_factory: AppFactory
+) -> None:
+    processor = FakeProcessor()
+    client = TestClient(app_factory(_with_processor(ready_state, processor)))
+
+    response = client.post(
+        "/v1/process",
+        files=_upload(),
+        data={"context": CONVERSATION, "language": "ru"},
+    )
+
+    assert response.status_code == 200
+    assert processor.contexts == [CONVERSATION]
+    assert processor.languages == ["ru"]
+
+
+def test_dictate_forwards_the_conversation_context_and_the_language(
+    ready_state: ServerState, app_factory: AppFactory
+) -> None:
+    processor = FakeProcessor()
+    client = TestClient(app_factory(_with_processor(ready_state, processor)))
+
+    response = client.post(
+        "/v1/dictate",
+        files=_upload(),
+        data={"context": CONVERSATION, "language": "en"},
+    )
+
+    assert response.status_code == 200
+    assert processor.contexts == [CONVERSATION]
+    assert processor.languages == ["en"]
+
+
+def test_a_request_without_a_context_or_language_forwards_nothing(
+    ready_state: ServerState, app_factory: AppFactory
+) -> None:
+    """Both fields are optional; an old client that sends neither must keep working."""
+    processor = FakeProcessor()
+    client = TestClient(app_factory(_with_processor(ready_state, processor)))
+
+    response = client.post("/v1/process", files=_upload())
+
+    assert response.status_code == 200
+    assert processor.contexts == [None]
+    assert processor.languages == [None]
+
+
+def test_transform_accepts_a_context_and_a_language_in_the_json_body(
+    ready_state: ServerState, app_factory: AppFactory
+) -> None:
+    processor = FakeProcessor()
+    client = TestClient(app_factory(_with_processor(ready_state, processor)))
+
+    response = client.post(
+        "/v1/transform",
+        json={"text": "посмотри мембершип", "context": CONVERSATION, "language": "ru"},
+    )
+
+    assert response.status_code == 200
+    assert processor.contexts == [CONVERSATION]
+    assert processor.languages == ["ru"]
+
+
+def test_the_conversation_context_is_never_logged_without_log_text(
+    ready_state: ServerState, app_factory: AppFactory, caplog: pytest.LogCaptureFixture
+) -> None:
+    """It carries whatever was said to the coding agent, so it is held to the transcript rule."""
+    processor = FakeProcessor()
+    client = TestClient(app_factory(_with_processor(ready_state, processor)))
+
+    with caplog.at_level(logging.DEBUG):
+        response = client.post("/v1/process", files=_upload(), data={"context": CONVERSATION})
+
+    assert response.status_code == 200
+    assert CONVERSATION_MARKER not in caplog.text
+    assert "context_bytes=" in caplog.text
 
 
 def test_process_forwards_what_the_caller_said_about_itself(
@@ -570,7 +749,6 @@ def test_process_forwards_what_the_caller_said_about_itself(
         "/v1/process",
         files=_upload(),
         data={
-            "mode": "context",
             "project": PROJECT,
             "project_name": "jigward",
             "client_id": "vox-idea",
@@ -588,7 +766,7 @@ def test_process_reports_an_anonymous_caller_as_nothing_at_all(
     processor = FakeProcessor()
     client = TestClient(app_factory(_with_processor(ready_state, processor)))
 
-    client.post("/v1/process", files=_upload(), data={"mode": "context"})
+    client.post("/v1/process", files=_upload())
 
     assert processor.provenance == [(None, None, None, None)]
 
@@ -599,7 +777,7 @@ def test_process_works_without_any_project(
     processor = FakeProcessor()
     client = TestClient(app_factory(_with_processor(ready_state, processor)))
 
-    response = client.post("/v1/process", files=_upload(), data={"mode": "context"})
+    response = client.post("/v1/process", files=_upload())
 
     assert response.status_code == 200
     assert not processor.projects[0]
@@ -614,7 +792,7 @@ def test_transform_accepts_a_project_in_the_json_body(
 
     response = client.post(
         "/v1/transform",
-        json={"text": "посмотри мембершип", "mode": "clean", "project": PROJECT},
+        json={"text": "посмотри мембершип", "project": PROJECT},
     )
 
     assert response.status_code == 200
@@ -628,7 +806,7 @@ def test_transform_works_without_a_project(
     ready_state.transcriber = None
     client = TestClient(app_factory(_with_processor(ready_state, processor)))
 
-    response = client.post("/v1/transform", json={"text": "посмотри мембершип", "mode": "clean"})
+    response = client.post("/v1/transform", json={"text": "посмотри мембершип"})
 
     assert response.status_code == 200
     assert not processor.projects[0]
@@ -639,8 +817,7 @@ def test_an_oversized_project_is_truncated_instead_of_rejected(
     settings_factory: Callable[..., Settings],
     transcriber_factory: Callable[..., Any],
     llm_factory: Callable[..., Any],
-    mode_factory: Callable[..., Any],
-    registry_factory: Callable[..., ModeRegistry],
+    prompt_factory: Callable[..., Prompt],
     processor_factory: Callable[..., Processor],
     app_factory: AppFactory,
     caplog: pytest.LogCaptureFixture,
@@ -654,19 +831,13 @@ def test_an_oversized_project_is_truncated_instead_of_rejected(
     settings = settings_factory(max_project_bytes=MAX_PROJECT_BYTES)
     llm = llm_factory("Проверь membership.")
     transcriber = transcriber_factory(ready=True)
-    modes = registry_factory(
-        mode_factory(
-            "context",
-            requires_llm=True,
-            system_prompt="Ты редактор инженерных запросов.\n\n{project}",
-        )
-    )
+    prompt = prompt_factory(system_prompt="Ты редактор инженерных запросов.\n\n{project}")
     state = state_factory(
         settings=settings,
         transcriber=transcriber,
         llm=llm,
-        modes=modes,
-        processor=processor_factory(transcriber, llm, modes, settings=settings),
+        prompt=prompt,
+        processor=processor_factory(transcriber, llm, prompt, settings=settings),
         llm_ready=True,
     )
     client = TestClient(app_factory(state))
@@ -675,7 +846,7 @@ def test_an_oversized_project_is_truncated_instead_of_rejected(
         response = client.post(
             "/v1/process",
             files=_upload(),
-            data={"mode": "context", "project": OVERSIZED_PROJECT, "project_name": "jigward"},
+            data={"project": OVERSIZED_PROJECT, "project_name": "jigward"},
         )
 
     assert response.status_code == 200
@@ -690,3 +861,59 @@ def test_an_oversized_project_is_truncated_instead_of_rejected(
     assert PROJECT_LINES[0] not in user
     assert any(record.levelno == logging.WARNING for record in caplog.records)
     assert PROJECT_LINES[0] not in caplog.text
+
+
+def test_process_runs_the_task_prompt_at_the_task_temperature(
+    state_factory: StateFactory,
+    settings_factory: Callable[..., Settings],
+    transcriber_factory: Callable[..., Any],
+    llm_factory: Callable[..., Any],
+    processor_factory: Callable[..., Processor],
+    app_factory: AppFactory,
+) -> None:
+    settings = settings_factory(llm_temperature=0.42, llm_dictation_temperature=0.0)
+    transcriber = transcriber_factory(ready=True)
+    llm = llm_factory("Проверь membership.")
+    state = state_factory(
+        settings=settings,
+        transcriber=transcriber,
+        llm=llm,
+        processor=processor_factory(transcriber, llm, settings=settings),
+        llm_ready=True,
+    )
+    client = TestClient(app_factory(state))
+
+    response = client.post("/v1/process", files=_upload())
+
+    assert response.status_code == 200
+    system, _user, temperature = llm.calls[0]
+    assert system == "Ты редактор."
+    assert temperature == pytest.approx(0.42)
+
+
+def test_dictate_runs_the_dictation_prompt_at_the_dictation_temperature(
+    state_factory: StateFactory,
+    settings_factory: Callable[..., Settings],
+    transcriber_factory: Callable[..., Any],
+    llm_factory: Callable[..., Any],
+    processor_factory: Callable[..., Processor],
+    app_factory: AppFactory,
+) -> None:
+    settings = settings_factory(llm_temperature=0.42, llm_dictation_temperature=0.0)
+    transcriber = transcriber_factory(ready=True)
+    llm = llm_factory("Расшифровка, готово.")
+    state = state_factory(
+        settings=settings,
+        transcriber=transcriber,
+        llm=llm,
+        processor=processor_factory(transcriber, llm, settings=settings),
+        llm_ready=True,
+    )
+    client = TestClient(app_factory(state))
+
+    response = client.post("/v1/dictate", files=_upload())
+
+    assert response.status_code == 200
+    system, _user, temperature = llm.calls[0]
+    assert system == "Ты диктофон."
+    assert temperature == pytest.approx(0.0)

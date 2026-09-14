@@ -17,8 +17,8 @@ from .config import Settings, get_settings, redacted_base_url, set_settings
 from .glossary import Glossary
 from .health import ServerState, refresh_llm
 from .llm import OpenAICompatibleClient
-from .modes import ModeRegistry
 from .processor import Processor
+from .prompt import Prompt, load_prompt
 from .trace import TraceWriter
 from .transcription import Transcriber
 
@@ -88,7 +88,8 @@ async def _warm_up(
     state: ServerState,
     transcriber: Transcriber,
     llm: OpenAICompatibleClient,
-    modes: ModeRegistry,
+    prompt: Prompt,
+    dictation_prompt: Prompt,
     glossary: Glossary,
     settings: Settings,
     trace_writer: TraceWriter | None,
@@ -119,34 +120,40 @@ async def _warm_up(
         redacted_base_url(settings.llm_base_url),
         "ready" if state.llm_ready else f"unavailable ({state.llm_error})",
     )
-    if state.llm_ready:
+    if state.llm_ready and settings.llm_warmup:
         await _warm_llm(llm)
+    elif state.llm_ready:
+        logger.info("llm warmup is off; the first request pays whatever the endpoint charges it")
 
-    state.processor = Processor(transcriber, llm, modes, glossary, settings, trace_writer)
+    state.processor = Processor(
+        transcriber, llm, prompt, dictation_prompt, glossary, settings, trace_writer
+    )
     state.warming = False
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Load glossary, modes, STT and the LLM client, then publish them on ``app.state``.
+    """Load glossary, both prompts, STT and the LLM client, then publish them on ``app.state``.
 
-    A modes failure is fatal: without prompts the server has nothing to serve. An STT
-    failure is not - it is recorded on the state so /health reports it while the process
-    keeps answering.
+    A prompt failure is fatal: without them the server has nothing to serve. An STT failure is
+    not - it is recorded on the state so /health reports it while the process keeps
+    answering.
     """
     settings = get_settings()
     configure_logging(settings.log_level)
 
     glossary = Glossary.load(settings.glossary_path)
-    modes = ModeRegistry.load(settings.modes_dir)
+    prompt = load_prompt(settings.prompt_path)
+    dictation_prompt = load_prompt(settings.dictation_prompt_path)
     state = ServerState(
         settings=settings,
         started_at=time.monotonic(),
-        modes=modes,
+        prompt=prompt,
+        dictation_prompt=dictation_prompt,
         glossary=glossary,
     )
     app.state.server_state = state
-    logger.info("loaded %d modes and %d glossary entries", len(modes), len(glossary))
+    logger.info("loaded %d glossary entries", len(glossary))
 
     transcriber = Transcriber(settings, hotwords=glossary.as_stt_prompt() or None)
     state.transcriber = transcriber
@@ -165,7 +172,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # which is what the companion and start.ps1 report progress from.
     trace_writer = build_trace_writer(settings)
     warmup_task = asyncio.create_task(
-        _warm_up(state, transcriber, llm, modes, glossary, settings, trace_writer)
+        _warm_up(
+            state, transcriber, llm, prompt, dictation_prompt, glossary, settings, trace_writer
+        )
     )
     logger.info("listening on %s:%d (warming up in the background)", settings.host, settings.port)
     try:
@@ -212,7 +221,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--llm-timeout-seconds", type=float, help="per-request LLM timeout")
     parser.add_argument("--llm-temperature", type=float, help="sampling temperature")
     parser.add_argument("--llm-max-tokens", type=int, help="maximum tokens to generate")
-    parser.add_argument("--modes-dir", type=Path, help="directory holding the mode files")
+    parser.add_argument("--prompt-path", type=Path, help="markdown file holding the task prompt")
+    parser.add_argument(
+        "--dictation-prompt-path", type=Path, help="markdown file holding the dictation prompt"
+    )
     parser.add_argument("--glossary-path", type=Path, help="glossary YAML file")
     parser.add_argument("--processing-concurrency", type=int, help="concurrent AI pipelines")
     parser.add_argument("--log-level", help="DEBUG, INFO, WARNING, ERROR")

@@ -94,8 +94,7 @@ def test_a_think_block_does_not_eat_the_answer() -> None:
             "Ответ сервиса надо проверить тут:\n- UserController",
             "Ответ сервиса надо проверить тут:\n- UserController",
         ),
-        # task mode emits this exact header; deleting it would silently drop the questions.
-        ("Открытые вопросы:\n- Нужен ли индекс?", "Открытые вопросы:\n- Нужен ли индекс?"),
+        ("Проверить надо это:\n- Нужен ли index?", "Проверить надо это:\n- Нужен ли index?"),
         ("Вот итоговый промпт:\nДобавь индекс.", "Добавь индекс."),
         ("Here is your prompt:\nAdd the index.", "Add the index."),
         ("Here’s the final prompt:\nAdd it.", "Add it."),

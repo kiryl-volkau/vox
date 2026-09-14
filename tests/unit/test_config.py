@@ -25,17 +25,22 @@ def test_defaults_match_the_documented_contract() -> None:
     assert settings.llm_api_key.get_secret_value() == "local"
     assert settings.llm_timeout_seconds == 120.0
     assert settings.llm_temperature == 0.1
+    assert settings.llm_dictation_temperature == 0.0
     assert settings.llm_max_tokens == 1024
+    assert settings.llm_warmup is True
     assert settings.processing_concurrency == 1
     assert settings.log_level == "INFO"
     assert settings.log_text is False
     assert settings.trace_dir is None
     assert settings.trace_keep == 200
-    assert settings.modes_dir == Path("modes")
+    assert settings.prompt_path == Path("prompt.md")
+    assert settings.dictation_prompt_path == Path("dictation.md")
     assert settings.glossary_path == Path("config/glossary.yaml")
     assert settings.max_audio_bytes == 25_000_000
     assert settings.max_audio_seconds == 300.0
     assert settings.max_project_bytes == 8000
+    assert settings.max_context_bytes == 6000
+    assert settings.default_language == "en"
 
 
 def test_every_field_can_come_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -53,17 +58,22 @@ def test_every_field_can_come_from_the_environment(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv("LLM_API_KEY", "sk-from-env")
     monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "12.5")
     monkeypatch.setenv("LLM_TEMPERATURE", "0.7")
+    monkeypatch.setenv("LLM_DICTATION_TEMPERATURE", "0.05")
     monkeypatch.setenv("LLM_MAX_TOKENS", "2048")
     monkeypatch.setenv("PROCESSING_CONCURRENCY", "4")
     monkeypatch.setenv("LOG_LEVEL", "DEBUG")
     monkeypatch.setenv("LOG_TEXT", "true")
     monkeypatch.setenv("VOX_TRACE_DIR", "/srv/traces")
     monkeypatch.setenv("VOX_TRACE_KEEP", "25")
-    monkeypatch.setenv("MODES_DIR", "/srv/modes")
+    monkeypatch.setenv("PROMPT_PATH", "/srv/vox/prompt.md")
+    monkeypatch.setenv("DICTATION_PROMPT_PATH", "/srv/vox/dictation.md")
     monkeypatch.setenv("GLOSSARY_PATH", "/srv/glossary.yaml")
     monkeypatch.setenv("MAX_AUDIO_BYTES", "1024")
     monkeypatch.setenv("MAX_AUDIO_SECONDS", "42.5")
     monkeypatch.setenv("MAX_PROJECT_BYTES", "1500")
+    monkeypatch.setenv("MAX_CONTEXT_BYTES", "900")
+    monkeypatch.setenv("DEFAULT_LANGUAGE", "ru")
+    monkeypatch.setenv("LLM_WARMUP", "false")
 
     settings = Settings(_env_file=None)
 
@@ -81,17 +91,22 @@ def test_every_field_can_come_from_the_environment(monkeypatch: pytest.MonkeyPat
     assert settings.llm_api_key.get_secret_value() == "sk-from-env"
     assert settings.llm_timeout_seconds == 12.5
     assert settings.llm_temperature == 0.7
+    assert settings.llm_dictation_temperature == 0.05
     assert settings.llm_max_tokens == 2048
     assert settings.processing_concurrency == 4
     assert settings.log_level == "DEBUG"
     assert settings.log_text is True
     assert settings.trace_dir == Path("/srv/traces")
     assert settings.trace_keep == 25
-    assert settings.modes_dir == Path("/srv/modes")
+    assert settings.prompt_path == Path("/srv/vox/prompt.md")
+    assert settings.dictation_prompt_path == Path("/srv/vox/dictation.md")
     assert settings.glossary_path == Path("/srv/glossary.yaml")
     assert settings.max_audio_bytes == 1024
     assert settings.max_audio_seconds == 42.5
     assert settings.max_project_bytes == 1500
+    assert settings.max_context_bytes == 900
+    assert settings.default_language == "ru"
+    assert settings.llm_warmup is False
 
 
 def test_environment_names_are_case_insensitive(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -110,13 +125,17 @@ def test_fields_can_be_passed_by_name() -> None:
         stt_model="medium",
         processing_concurrency=3,
         llm_api_key=SecretStr("sk-inline"),
-        modes_dir=Path("/tmp/modes"),
+        prompt_path=Path("/tmp/vox/prompt.md"),
+        dictation_prompt_path=Path("/tmp/vox/dictation.md"),
+        llm_dictation_temperature=0.02,
     )
 
     assert settings.stt_model == "medium"
     assert settings.processing_concurrency == 3
     assert settings.llm_api_key.get_secret_value() == "sk-inline"
-    assert settings.modes_dir == Path("/tmp/modes")
+    assert settings.prompt_path == Path("/tmp/vox/prompt.md")
+    assert settings.dictation_prompt_path == Path("/tmp/vox/dictation.md")
+    assert settings.llm_dictation_temperature == 0.02
 
 
 def test_named_kwargs_win_over_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -220,7 +239,8 @@ def test_unpassed_options_do_not_clobber_defaults() -> None:
 
     assert settings.host == "0.0.0.0"
     assert settings.port == 8765
-    assert settings.modes_dir == Path("modes")
+    assert settings.prompt_path == Path("prompt.md")
+    assert settings.dictation_prompt_path == Path("dictation.md")
     assert settings.trace_dir is None
 
 
@@ -231,3 +251,11 @@ def test_tracing_can_be_switched_on_from_the_command_line() -> None:
 
     assert settings.trace_dir == Path("/srv/traces")
     assert settings.trace_keep == 5
+
+
+def test_the_dictation_prompt_path_can_be_set_from_the_command_line() -> None:
+    from vox_server.main import settings_from_args
+
+    settings = settings_from_args(["--dictation-prompt-path", "/srv/vox/dictation.md"])
+
+    assert settings.dictation_prompt_path == Path("/srv/vox/dictation.md")

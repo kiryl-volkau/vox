@@ -12,8 +12,8 @@ from .config import Settings, redacted_base_url
 from .glossary import Glossary
 from .llm import OpenAICompatibleClient
 from .models import GpuHealth, HealthResponse, LlmHealth, SttHealth
-from .modes import ModeRegistry
 from .processor import Processor
+from .prompt import Prompt
 from .transcription import Transcriber
 
 logger = logging.getLogger(__name__)
@@ -33,7 +33,8 @@ class ServerState:
     started_at: float
     transcriber: Transcriber | None = None
     llm: OpenAICompatibleClient | None = None
-    modes: ModeRegistry | None = None
+    prompt: Prompt | None = None
+    dictation_prompt: Prompt | None = None
     glossary: Glossary | None = None
     processor: Processor | None = None
     stt_error: str | None = None

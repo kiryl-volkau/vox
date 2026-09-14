@@ -8,6 +8,8 @@ from urllib.parse import urlsplit, urlunsplit
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .languages import DEFAULT_LANGUAGE, normalise_language
+
 
 class Settings(BaseSettings):
     """Runtime configuration for the vox backend.
@@ -44,7 +46,14 @@ class Settings(BaseSettings):
     llm_api_key: SecretStr = Field(SecretStr("local"), validation_alias="LLM_API_KEY")
     llm_timeout_seconds: float = Field(120.0, validation_alias="LLM_TIMEOUT_SECONDS")
     llm_temperature: float = Field(0.1, validation_alias="LLM_TEMPERATURE")
+    # Dictation reproduces what was said rather than reformulating it, so it samples greedily.
+    llm_dictation_temperature: float = Field(0.0, validation_alias="LLM_DICTATION_TEMPERATURE")
     llm_max_tokens: int = Field(1024, validation_alias="LLM_MAX_TOKENS")
+
+    # Sends one throwaway completion at startup so a local model is resident before the first
+    # real request. A hosted endpoint has nothing to load, so there the call buys nothing and
+    # is billed like any other.
+    llm_warmup: bool = Field(True, validation_alias="LLM_WARMUP")
 
     processing_concurrency: int = Field(1, validation_alias="PROCESSING_CONCURRENCY")
 
@@ -54,12 +63,25 @@ class Settings(BaseSettings):
     trace_dir: Path | None = Field(None, validation_alias="VOX_TRACE_DIR")
     trace_keep: int = Field(200, validation_alias="VOX_TRACE_KEEP")
 
-    modes_dir: Path = Field(Path("modes"), validation_alias="MODES_DIR")
+    prompt_path: Path = Field(Path("prompt.md"), validation_alias="PROMPT_PATH")
+    dictation_prompt_path: Path = Field(
+        Path("dictation.md"), validation_alias="DICTATION_PROMPT_PATH"
+    )
     glossary_path: Path = Field(Path("config/glossary.yaml"), validation_alias="GLOSSARY_PATH")
 
     max_audio_bytes: int = Field(25_000_000, validation_alias="MAX_AUDIO_BYTES")
     max_audio_seconds: float = Field(300.0, validation_alias="MAX_AUDIO_SECONDS")
     max_project_bytes: int = Field(8000, validation_alias="MAX_PROJECT_BYTES")
+    max_context_bytes: int = Field(6000, validation_alias="MAX_CONTEXT_BYTES")
+
+    # The language the answer is written in when the caller does not ask for one. STT_LANGUAGE
+    # stays separate: what was spoken and what the answer is written in need not match.
+    default_language: str = Field(DEFAULT_LANGUAGE, validation_alias="DEFAULT_LANGUAGE")
+
+    @field_validator("default_language")
+    @classmethod
+    def _known_language(cls, value: str) -> str:
+        return normalise_language(value) or DEFAULT_LANGUAGE
 
     @field_validator("trace_dir", mode="before")
     @classmethod

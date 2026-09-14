@@ -19,15 +19,13 @@ from .models import (
     ErrorBody,
     HealthResponse,
     LlmHealth,
-    ModesResponse,
     ProcessResponse,
     SttHealth,
     TranscribeResponse,
     TransformRequest,
     TransformResponse,
 )
-from .modes import UnknownModeError
-from .processor import EmptyOutputError, EmptyTranscriptError, Processor
+from .processor import EmptyTranscriptError, Processor
 from .transcription import TranscriptionError
 
 logger = logging.getLogger(__name__)
@@ -38,7 +36,6 @@ REQUEST_ID_HEADER = "X-Request-ID"
 
 _DOMAIN_ERRORS: tuple[tuple[type[Exception], int, str, str], ...] = (
     (EmptyTranscriptError, 422, "empty_transcript", "no speech was recognised"),
-    (EmptyOutputError, 502, "empty_llm_output", "the language model returned no usable text"),
     (TranscriptionError, 503, "stt_unavailable", "speech recognition is unavailable"),
     (LlmTimeoutError, 504, "llm_timeout", "the language model timed out"),
     (LlmUnavailableError, 503, "llm_unavailable", "the language model is unreachable"),
@@ -147,6 +144,16 @@ def _log_project(
         logger.debug("request_id=%s project_text=%r", request_id, project)
 
 
+def _log_context(request_id: str, context: str | None, settings: Settings) -> None:
+    if not context:
+        return
+    logger.info("request_id=%s context_bytes=%d", request_id, len(context.encode("utf-8")))
+    # The conversation carries whatever was said to the coding agent earlier, so it is held
+    # to the same rule as transcripts: never logged unless the operator asked for text.
+    if settings.log_text:
+        logger.debug("request_id=%s context_text=%r", request_id, context)
+
+
 def _degraded_health(settings: Settings, reason: str, state: ServerState | None) -> HealthResponse:
     return HealthResponse(
         status="degraded",
@@ -182,48 +189,98 @@ async def health(request: Request) -> HealthResponse:
         return _degraded_health(state.settings, f"health check failed: {exc}", state)
 
 
-@router.get("/v1/modes")
-async def list_modes(request: Request) -> ModesResponse:
-    """List the prompt modes the backend loaded from the modes directory."""
-    state = _server_state(request)
-    modes = state.modes
-    if modes is None:
-        raise RequestRejectedError(503, "warming", "modes are still loading")
-    return ModesResponse(modes=[mode.to_info() for mode in modes.list()])
-
-
-@router.post("/v1/process")
-async def process_audio(
+async def _transcribe_and_prompt(
     request: Request,
-    audio: Annotated[UploadFile, File()],
-    mode: Annotated[str, Form()] = "context",
-    project: Annotated[str | None, Form()] = None,
-    project_name: Annotated[str | None, Form()] = None,
-    client_id: Annotated[str | None, Form()] = None,
-    client_version: Annotated[str | None, Form()] = None,
-    audio_seconds: Annotated[float | None, Form()] = None,
+    audio: UploadFile,
+    *,
+    dictation: bool,
+    project: str | None,
+    project_name: str | None,
+    context: str | None,
+    language: str | None,
+    client_id: str | None,
+    client_version: str | None,
+    audio_seconds: float | None,
 ) -> ProcessResponse:
-    """Transcribe the uploaded WAV and return the mode's text, ready to paste."""
+    """The body shared by /v1/process and /v1/dictate; only the prompt differs."""
     state = _server_state(request)
     processor = _ready_processor(state, needs_stt=True)
     request_id = _request_id(request)
     data = await _read_upload(audio, state.settings, audio_seconds)
     logger.debug(
-        "request_id=%s mode=%s client=%s/%s bytes=%d client_audio_s=%s",
+        "request_id=%s dictation=%s language=%s client=%s/%s bytes=%d client_audio_s=%s",
         request_id,
-        mode,
+        dictation,
+        language,
         client_id,
         client_version,
         len(data),
         audio_seconds,
     )
     _log_project(request_id, project_name, project, state.settings)
+    _log_context(request_id, context, state.settings)
     return await processor.process(
         data,
-        mode,
         request_id=request_id,
+        dictation=dictation,
         project=project,
         project_name=project_name,
+        context=context,
+        language=language,
+        client_id=client_id,
+        client_version=client_version,
+        audio_seconds=audio_seconds,
+    )
+
+
+@router.post("/v1/process")
+async def process_audio(
+    request: Request,
+    audio: Annotated[UploadFile, File()],
+    project: Annotated[str | None, Form()] = None,
+    project_name: Annotated[str | None, Form()] = None,
+    context: Annotated[str | None, Form()] = None,
+    language: Annotated[str | None, Form()] = None,
+    client_id: Annotated[str | None, Form()] = None,
+    client_version: Annotated[str | None, Form()] = None,
+    audio_seconds: Annotated[float | None, Form()] = None,
+) -> ProcessResponse:
+    """Transcribe the uploaded WAV and return the formalised task, ready to paste."""
+    return await _transcribe_and_prompt(
+        request,
+        audio,
+        dictation=False,
+        project=project,
+        project_name=project_name,
+        context=context,
+        language=language,
+        client_id=client_id,
+        client_version=client_version,
+        audio_seconds=audio_seconds,
+    )
+
+
+@router.post("/v1/dictate")
+async def dictate_audio(
+    request: Request,
+    audio: Annotated[UploadFile, File()],
+    project: Annotated[str | None, Form()] = None,
+    project_name: Annotated[str | None, Form()] = None,
+    context: Annotated[str | None, Form()] = None,
+    language: Annotated[str | None, Form()] = None,
+    client_id: Annotated[str | None, Form()] = None,
+    client_version: Annotated[str | None, Form()] = None,
+    audio_seconds: Annotated[float | None, Form()] = None,
+) -> ProcessResponse:
+    """Transcribe the uploaded WAV and return it punctuated, with nothing reformulated."""
+    return await _transcribe_and_prompt(
+        request,
+        audio,
+        dictation=True,
+        project=project,
+        project_name=project_name,
+        context=context,
+        language=language,
         client_id=client_id,
         client_version=client_version,
         audio_seconds=audio_seconds,
@@ -246,13 +303,23 @@ async def transcribe_audio(
 
 @router.post("/v1/transform")
 async def transform_text(request: Request, payload: TransformRequest) -> TransformResponse:
-    """Run already-transcribed text through a mode, for replaying or testing prompts."""
+    """Run already-transcribed text through a prompt, for replaying or testing it.
+
+    ``dictation`` in the body picks the dictation prompt, so both prompts can be tried
+    against the same text without a microphone.
+    """
     state = _server_state(request)
     processor = _ready_processor(state, needs_stt=False)
     request_id = _request_id(request)
     _log_project(request_id, None, payload.project, state.settings)
+    _log_context(request_id, payload.context, state.settings)
     return await processor.transform_only(
-        payload.text, payload.mode, request_id=request_id, project=payload.project
+        payload.text,
+        request_id=request_id,
+        dictation=payload.dictation,
+        project=payload.project,
+        context=payload.context,
+        language=payload.language,
     )
 
 
@@ -262,11 +329,6 @@ async def _internal_error_handler(request: Request, exc: Exception) -> Response:
 
 
 async def _domain_error_handler(request: Request, exc: Exception) -> Response:
-    if isinstance(exc, UnknownModeError):
-        available = ", ".join(exc.available)
-        return _error_response(
-            request, 400, "unknown_mode", f"unknown mode '{exc.name}'; available: {available}"
-        )
     if isinstance(exc, RequestRejectedError):
         return _error_response(request, exc.status_code, exc.error, exc.detail)
     for exc_type, status_code, error, detail in _DOMAIN_ERRORS:
@@ -310,10 +372,8 @@ def register_exception_handlers(app: FastAPI) -> None:
     with its traceback and answered with a bare ``internal_error``.
     """
     domain_exceptions: tuple[type[Exception], ...] = (
-        UnknownModeError,
         RequestRejectedError,
         EmptyTranscriptError,
-        EmptyOutputError,
         TranscriptionError,
         LlmTimeoutError,
         LlmUnavailableError,

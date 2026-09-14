@@ -10,7 +10,6 @@ import pytest
 
 from vox_server.config import Settings
 from vox_server.models import TranscriptionResult
-from vox_server.modes import Mode, ModeRegistry
 from vox_server.processor import Processor
 
 AUDIO = b"audio-payload"
@@ -44,7 +43,7 @@ class OverlapRecordingTranscriber:
 
 async def _run_three(processor: Processor) -> list[str]:
     responses = await asyncio.gather(
-        *(processor.process(AUDIO, "plain", request_id=f"req-{index}") for index in range(3))
+        *(processor.process(AUDIO, request_id=f"req-{index}") for index in range(3))
     )
     return [response.output for response in responses]
 
@@ -52,8 +51,6 @@ async def _run_three(processor: Processor) -> list[str]:
 @pytest.mark.parametrize("concurrency", [1, 2])
 async def test_the_semaphore_caps_simultaneous_transcriptions(
     concurrency: int,
-    mode_factory: Callable[..., Mode],
-    registry_factory: Callable[..., ModeRegistry],
     processor_factory: Callable[..., Processor],
     llm_factory: Callable[..., Any],
     settings_factory: Callable[..., Settings],
@@ -61,8 +58,7 @@ async def test_the_semaphore_caps_simultaneous_transcriptions(
     transcriber = OverlapRecordingTranscriber()
     processor = processor_factory(
         transcriber,
-        llm_factory(),
-        registry_factory(mode_factory("plain", requires_llm=False)),
+        llm_factory("расшифровка"),
         settings=settings_factory(processing_concurrency=concurrency),
     )
 
@@ -74,8 +70,6 @@ async def test_the_semaphore_caps_simultaneous_transcriptions(
 
 
 async def test_requests_queue_instead_of_failing_when_the_gate_is_busy(
-    mode_factory: Callable[..., Mode],
-    registry_factory: Callable[..., ModeRegistry],
     processor_factory: Callable[..., Processor],
     llm_factory: Callable[..., Any],
     settings_factory: Callable[..., Settings],
@@ -83,8 +77,7 @@ async def test_requests_queue_instead_of_failing_when_the_gate_is_busy(
     transcriber = OverlapRecordingTranscriber()
     processor = processor_factory(
         transcriber,
-        llm_factory(),
-        registry_factory(mode_factory("plain", requires_llm=False)),
+        llm_factory("расшифровка"),
         settings=settings_factory(processing_concurrency=1),
     )
 

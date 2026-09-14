@@ -17,8 +17,8 @@ from vox_server.glossary import Glossary
 from vox_server.health import ServerState
 from vox_server.llm import LlmTimeoutError
 from vox_server.main import build_trace_writer
-from vox_server.modes import Mode, ModeRegistry
 from vox_server.processor import EmptyTranscriptError, Processor
+from vox_server.prompt import Prompt
 from vox_server.trace import RequestTrace, TraceWriter
 
 AUDIO = b"RIFF-not-really-decoded-by-the-fake"
@@ -29,20 +29,21 @@ TRANSCRIPT = "посмотри мембершип"
 REPLY = "Проверь membership."
 PROJECT_MARKER = "ПРОЕКТ-МАРКЕР-7"
 PROJECT = f"{PROJECT_MARKER}: модуль billing не трогаем.\nДжигвард -> Jigward."
-PROJECT_HEADER = "КОНТЕКСТ ПРОЕКТА"
+PROJECT_HEADER = "<project_context>"
 SYSTEM_WITH_PROJECT = "Ты редактор инженерных запросов.\n\n{project}"
 
 TRACE_KEYS = {
     "request_id",
     "started_at",
     "endpoint",
-    "mode",
     "status",
     "error",
     "client",
     "audio",
     "stt",
+    "language",
     "project",
+    "context",
     "glossary",
     "prompt",
     "llm",
@@ -51,8 +52,7 @@ TRACE_KEYS = {
 }
 TRACE_FILE_NAME = re.compile(r"^\d{8}-\d{6}-\d{3}-[A-Za-z0-9_-]+\.json$")
 
-ModeFactory = Callable[..., Mode]
-RegistryFactory = Callable[..., ModeRegistry]
+PromptFactory = Callable[..., Prompt]
 ProcessorFactory = Callable[..., Processor]
 StateFactory = Callable[..., ServerState]
 AppFactory = Callable[..., FastAPI]
@@ -80,7 +80,6 @@ def make_trace(request_id: str, *, second: int) -> RequestTrace:
     return RequestTrace(
         request_id=request_id,
         endpoint="process",
-        mode="clean",
         started_at=datetime(2026, 3, 4, 10, 0, second, tzinfo=UTC),
     )
 
@@ -104,8 +103,6 @@ def test_tracing_is_off_until_a_directory_is_configured(
 
 
 async def test_a_processor_without_a_writer_puts_nothing_on_disk(
-    mode_factory: ModeFactory,
-    registry_factory: RegistryFactory,
     processor_factory: ProcessorFactory,
     transcriber_factory: Fake,
     llm_factory: Fake,
@@ -113,23 +110,17 @@ async def test_a_processor_without_a_writer_puts_nothing_on_disk(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """No trace_dir means no file anywhere, and the pipeline behaves exactly as before."""
-    mode = mode_factory("clean", requires_llm=True, system_prompt=SYSTEM_WITH_PROJECT)
-    processor = processor_factory(
-        transcriber_factory(TRANSCRIPT), llm_factory(REPLY), registry_factory(mode)
-    )
+    processor = processor_factory(transcriber_factory(TRANSCRIPT), llm_factory(REPLY))
     monkeypatch.chdir(tmp_path)
 
-    response = await processor.process(AUDIO, "clean", request_id="req-off", project=PROJECT)
+    response = await processor.process(AUDIO, request_id="req-off", project=PROJECT)
 
     assert response.transcript == TRANSCRIPT
-    assert response.normalized_text == REPLY
     assert response.output == REPLY
     assert list(tmp_path.rglob("*")) == []
 
 
 async def test_a_successful_process_writes_one_trace_named_after_the_request(
-    mode_factory: ModeFactory,
-    registry_factory: RegistryFactory,
     processor_factory: ProcessorFactory,
     transcriber_factory: Fake,
     llm_factory: Fake,
@@ -138,11 +129,10 @@ async def test_a_successful_process_writes_one_trace_named_after_the_request(
     processor = processor_factory(
         transcriber_factory(TRANSCRIPT),
         llm_factory(REPLY),
-        registry_factory(mode_factory("clean", requires_llm=True)),
         trace_writer=TraceWriter(trace_dir, 10),
     )
 
-    await processor.process(AUDIO, "clean", request_id="req-name-1")
+    await processor.process(AUDIO, request_id="req-name-1")
 
     files = written(trace_dir)
     assert len(files) == 1
@@ -152,32 +142,25 @@ async def test_a_successful_process_writes_one_trace_named_after_the_request(
 
 
 async def test_the_trace_carries_every_documented_section(
-    mode_factory: ModeFactory,
-    registry_factory: RegistryFactory,
+    prompt_factory: PromptFactory,
     processor_factory: ProcessorFactory,
     transcriber_factory: Fake,
     llm_factory: Fake,
+    settings_factory: Callable[..., Settings],
     trace_dir: Path,
 ) -> None:
-    mode = mode_factory(
-        "clean",
-        requires_llm=True,
-        temperature=0.35,
-        wrap_for_claude=True,
-        wrapper_template="<<{normalized}>>",
-        user_template="Словарь:\n{glossary}\n\nРасшифровка:\n{transcript}",
-    )
+    prompt = prompt_factory(user_template="Словарь:\n{glossary}\n\nРасшифровка:\n{transcript}")
     processor = processor_factory(
         transcriber_factory(TRANSCRIPT),
         llm_factory(REPLY),
-        registry_factory(mode),
+        prompt,
         glossary=Glossary.from_mapping({"мембершип": "membership"}),
+        settings=settings_factory(llm_temperature=0.35),
         trace_writer=TraceWriter(trace_dir, 10),
     )
 
     await processor.process(
         AUDIO,
-        "clean",
         request_id="req-full",
         client_id="vox-idea",
         client_version="0.1.0",
@@ -189,7 +172,6 @@ async def test_the_trace_carries_every_documented_section(
     assert doc["request_id"] == "req-full"
     assert datetime.fromisoformat(doc["started_at"]).utcoffset() == UTC.utcoffset(None)
     assert doc["endpoint"] == "process"
-    assert doc["mode"] == "clean"
     assert doc["status"] == "ok"
     assert doc["error"] is None
     assert doc["client"] == {"id": "vox-idea", "version": "0.1.0", "audio_seconds": 1.25}
@@ -202,6 +184,7 @@ async def test_the_trace_carries_every_documented_section(
     assert doc["stt"]["duration_ms"] >= 0
     assert doc["stt"]["transcript"] == TRANSCRIPT
     assert doc["glossary"] == {"entries": 1, "prompt_block_chars": len("мембершип -> membership")}
+    assert doc["prompt"]["kind"] == "task"
     assert doc["prompt"]["system"] == "Ты редактор."
     assert doc["prompt"]["system_chars"] == len(doc["prompt"]["system"])
     assert doc["prompt"]["user_chars"] == len(doc["prompt"]["user"])
@@ -212,18 +195,50 @@ async def test_the_trace_carries_every_documented_section(
     assert doc["llm"]["duration_ms"] >= 0
     assert doc["llm"]["raw_output"] == REPLY
     assert doc["llm"]["cleaned_output"] == REPLY
-    assert doc["output"] == {
-        "wrapped_for_claude": True,
-        "chars": len(f"<<{REPLY}>>"),
-        "text": f"<<{REPLY}>>",
-    }
+    assert doc["output"] == {"chars": len(REPLY), "fell_back_to_transcript": False, "text": REPLY}
     assert set(doc["timings_ms"]) == {"transcription", "llm", "total"}
     assert doc["timings_ms"]["total"] >= doc["timings_ms"]["transcription"]
 
 
+async def test_the_trace_records_dictation_as_the_prompt_kind(
+    processor_factory: ProcessorFactory,
+    transcriber_factory: Fake,
+    llm_factory: Fake,
+    trace_dir: Path,
+) -> None:
+    processor = processor_factory(
+        transcriber_factory(TRANSCRIPT),
+        llm_factory(REPLY),
+        trace_writer=TraceWriter(trace_dir, 10),
+    )
+
+    await processor.process(AUDIO, request_id="req-dict-kind", dictation=True)
+    doc = only_trace(trace_dir)
+
+    assert doc["prompt"]["kind"] == "dictation"
+
+
+async def test_the_trace_records_a_fallback_to_the_transcript(
+    processor_factory: ProcessorFactory,
+    transcriber_factory: Fake,
+    llm_factory: Fake,
+    trace_dir: Path,
+) -> None:
+    processor = processor_factory(
+        transcriber_factory(TRANSCRIPT),
+        llm_factory(""),
+        trace_writer=TraceWriter(trace_dir, 10),
+    )
+
+    await processor.process(AUDIO, request_id="req-fallback")
+    doc = only_trace(trace_dir)
+
+    assert doc["status"] == "ok"
+    assert doc["output"]["text"] == TRANSCRIPT
+    assert doc["output"]["fell_back_to_transcript"] is True
+
+
 async def test_the_trace_is_utf8_json_that_keeps_russian_readable(
-    mode_factory: ModeFactory,
-    registry_factory: RegistryFactory,
     processor_factory: ProcessorFactory,
     transcriber_factory: Fake,
     llm_factory: Fake,
@@ -233,11 +248,10 @@ async def test_the_trace_is_utf8_json_that_keeps_russian_readable(
     processor = processor_factory(
         transcriber_factory(TRANSCRIPT),
         llm_factory(REPLY),
-        registry_factory(mode_factory("clean", requires_llm=True)),
         trace_writer=TraceWriter(trace_dir, 10),
     )
 
-    await processor.process(AUDIO, "clean", request_id="req-utf8")
+    await processor.process(AUDIO, request_id="req-utf8")
     raw = written(trace_dir)[0].read_text(encoding="utf-8")
 
     assert TRANSCRIPT in raw
@@ -247,8 +261,6 @@ async def test_the_trace_is_utf8_json_that_keeps_russian_readable(
 
 
 async def test_the_trace_never_contains_the_api_key(
-    mode_factory: ModeFactory,
-    registry_factory: RegistryFactory,
     processor_factory: ProcessorFactory,
     transcriber_factory: Fake,
     llm_factory: Fake,
@@ -258,12 +270,11 @@ async def test_the_trace_never_contains_the_api_key(
     processor = processor_factory(
         transcriber_factory(TRANSCRIPT),
         llm_factory(REPLY, base_url=CREDENTIALED_URL),
-        registry_factory(mode_factory("clean", requires_llm=True)),
         settings=settings_factory(llm_api_key=API_KEY),
         trace_writer=TraceWriter(trace_dir, 10),
     )
 
-    await processor.process(AUDIO, "clean", request_id="req-secret")
+    await processor.process(AUDIO, request_id="req-secret")
     raw = written(trace_dir)[0].read_text(encoding="utf-8")
     doc = json.loads(raw)
 
@@ -273,8 +284,6 @@ async def test_the_trace_never_contains_the_api_key(
 
 
 async def test_a_failing_request_is_still_traced(
-    mode_factory: ModeFactory,
-    registry_factory: RegistryFactory,
     processor_factory: ProcessorFactory,
     transcriber_factory: Fake,
     llm_factory: Fake,
@@ -283,12 +292,11 @@ async def test_a_failing_request_is_still_traced(
     processor = processor_factory(
         transcriber_factory(TRANSCRIPT),
         llm_factory(raises=LlmTimeoutError("too slow")),
-        registry_factory(mode_factory("clean", requires_llm=True)),
         trace_writer=TraceWriter(trace_dir, 10),
     )
 
     with pytest.raises(LlmTimeoutError):
-        await processor.process(AUDIO, "clean", request_id="req-boom")
+        await processor.process(AUDIO, request_id="req-boom")
     doc = only_trace(trace_dir)
 
     assert doc["status"] == "error"
@@ -301,8 +309,6 @@ async def test_a_failing_request_is_still_traced(
 
 
 async def test_an_error_trace_keeps_only_the_stages_that_ran(
-    mode_factory: ModeFactory,
-    registry_factory: RegistryFactory,
     processor_factory: ProcessorFactory,
     transcriber_factory: Fake,
     llm_factory: Fake,
@@ -311,12 +317,11 @@ async def test_an_error_trace_keeps_only_the_stages_that_ran(
     processor = processor_factory(
         transcriber_factory("   \n  "),
         llm_factory(REPLY),
-        registry_factory(mode_factory("clean", requires_llm=True)),
         trace_writer=TraceWriter(trace_dir, 10),
     )
 
     with pytest.raises(EmptyTranscriptError):
-        await processor.process(AUDIO, "clean", request_id="req-empty")
+        await processor.process(AUDIO, request_id="req-empty")
     doc = only_trace(trace_dir)
 
     assert doc["error"]["type"] == "EmptyTranscriptError"
@@ -327,8 +332,6 @@ async def test_an_error_trace_keeps_only_the_stages_that_ran(
 
 
 async def test_a_trace_that_cannot_be_written_never_fails_the_request(
-    mode_factory: ModeFactory,
-    registry_factory: RegistryFactory,
     processor_factory: ProcessorFactory,
     transcriber_factory: Fake,
     llm_factory: Fake,
@@ -341,12 +344,11 @@ async def test_a_trace_that_cannot_be_written_never_fails_the_request(
     processor = processor_factory(
         transcriber_factory(TRANSCRIPT),
         llm_factory(REPLY),
-        registry_factory(mode_factory("clean", requires_llm=True)),
         trace_writer=TraceWriter(trace_dir, 10),
     )
 
     with caplog.at_level(logging.WARNING):
-        response = await processor.process(AUDIO, "clean", request_id="req-denied")
+        response = await processor.process(AUDIO, request_id="req-denied")
 
     assert response.output == REPLY
     assert written(trace_dir) == []
@@ -413,8 +415,6 @@ async def test_cleanup_changed_reports_whether_the_reply_was_rewritten(
     reply: str,
     cleaned: str,
     changed: bool,
-    mode_factory: ModeFactory,
-    registry_factory: RegistryFactory,
     processor_factory: ProcessorFactory,
     transcriber_factory: Fake,
     llm_factory: Fake,
@@ -423,11 +423,10 @@ async def test_cleanup_changed_reports_whether_the_reply_was_rewritten(
     processor = processor_factory(
         transcriber_factory(TRANSCRIPT),
         llm_factory(reply),
-        registry_factory(mode_factory("clean", requires_llm=True)),
         trace_writer=TraceWriter(trace_dir, 10),
     )
 
-    await processor.process(AUDIO, "clean", request_id="req-clean")
+    await processor.process(AUDIO, request_id="req-clean")
     doc = only_trace(trace_dir)
 
     assert doc["llm"]["raw_output"] == reply
@@ -436,26 +435,23 @@ async def test_cleanup_changed_reports_whether_the_reply_was_rewritten(
 
 
 async def test_an_oversized_project_is_traced_as_truncated(
-    mode_factory: ModeFactory,
-    registry_factory: RegistryFactory,
+    prompt_factory: PromptFactory,
     processor_factory: ProcessorFactory,
     transcriber_factory: Fake,
     llm_factory: Fake,
     settings_factory: Callable[..., Settings],
     trace_dir: Path,
 ) -> None:
-    mode = mode_factory("clean", requires_llm=True, system_prompt=SYSTEM_WITH_PROJECT)
+    prompt = prompt_factory(system_prompt=SYSTEM_WITH_PROJECT)
     processor = processor_factory(
         transcriber_factory(TRANSCRIPT),
         llm_factory(REPLY),
-        registry_factory(mode),
+        prompt,
         settings=settings_factory(max_project_bytes=64),
         trace_writer=TraceWriter(trace_dir, 10),
     )
 
-    await processor.process(
-        AUDIO, "clean", request_id="req-big", project=PROJECT, project_name="jigward"
-    )
+    await processor.process(AUDIO, request_id="req-big", project=PROJECT, project_name="jigward")
     project = only_trace(trace_dir)["project"]
 
     assert project["name"] == "jigward"
@@ -468,24 +464,21 @@ async def test_an_oversized_project_is_traced_as_truncated(
 
 
 async def test_a_project_that_fits_is_not_flagged_as_truncated(
-    mode_factory: ModeFactory,
-    registry_factory: RegistryFactory,
+    prompt_factory: PromptFactory,
     processor_factory: ProcessorFactory,
     transcriber_factory: Fake,
     llm_factory: Fake,
     trace_dir: Path,
 ) -> None:
-    mode = mode_factory("clean", requires_llm=True, system_prompt=SYSTEM_WITH_PROJECT)
+    prompt = prompt_factory(system_prompt=SYSTEM_WITH_PROJECT)
     processor = processor_factory(
         transcriber_factory(TRANSCRIPT),
         llm_factory(REPLY),
-        registry_factory(mode),
+        prompt,
         trace_writer=TraceWriter(trace_dir, 10),
     )
 
-    await processor.process(
-        AUDIO, "clean", request_id="req-fits", project=PROJECT, project_name="jigward"
-    )
+    await processor.process(AUDIO, request_id="req-fits", project=PROJECT, project_name="jigward")
     project = only_trace(trace_dir)["project"]
 
     assert project["text"] == PROJECT
@@ -494,8 +487,7 @@ async def test_a_project_that_fits_is_not_flagged_as_truncated(
 
 
 async def test_the_traced_prompt_keeps_the_project_in_the_system_message(
-    mode_factory: ModeFactory,
-    registry_factory: RegistryFactory,
+    prompt_factory: PromptFactory,
     processor_factory: ProcessorFactory,
     transcriber_factory: Fake,
     llm_factory: Fake,
@@ -507,57 +499,27 @@ async def test_the_traced_prompt_keeps_the_project_in_the_system_message(
     message; a trace that showed them the other way round would send a reader chasing a cache
     regression that is not there.
     """
-    mode = mode_factory(
-        "clean",
-        requires_llm=True,
+    prompt = prompt_factory(
         system_prompt=SYSTEM_WITH_PROJECT,
         user_template="Словарь:\n{glossary}\n\nРасшифровка:\n{transcript}",
     )
     processor = processor_factory(
         transcriber_factory(TRANSCRIPT),
         llm_factory(REPLY),
-        registry_factory(mode),
+        prompt,
         trace_writer=TraceWriter(trace_dir, 10),
     )
 
-    await processor.process(AUDIO, "clean", request_id="req-cache", project=PROJECT)
-    prompt = only_trace(trace_dir)["prompt"]
+    await processor.process(AUDIO, request_id="req-cache", project=PROJECT)
+    prompt_doc = only_trace(trace_dir)["prompt"]
 
-    assert PROJECT in prompt["system"]
-    assert PROJECT_HEADER in prompt["system"]
-    assert PROJECT_MARKER not in prompt["user"]
-    assert prompt["user"].rstrip().endswith(TRANSCRIPT)
-
-
-async def test_a_mode_without_an_llm_traces_no_prompt_or_model_section(
-    mode_factory: ModeFactory,
-    registry_factory: RegistryFactory,
-    processor_factory: ProcessorFactory,
-    transcriber_factory: Fake,
-    llm_factory: Fake,
-    trace_dir: Path,
-) -> None:
-    processor = processor_factory(
-        transcriber_factory(TRANSCRIPT),
-        llm_factory(REPLY),
-        registry_factory(mode_factory("dictation", requires_llm=False)),
-        trace_writer=TraceWriter(trace_dir, 10),
-    )
-
-    await processor.process(AUDIO, "dictation", request_id="req-plain")
-    doc = only_trace(trace_dir)
-
-    assert doc["status"] == "ok"
-    assert doc["glossary"] is None
-    assert doc["prompt"] is None
-    assert doc["llm"] is None
-    assert doc["output"]["text"] == TRANSCRIPT
-    assert doc["timings_ms"]["llm"] == 0
+    assert PROJECT in prompt_doc["system"]
+    assert PROJECT_HEADER in prompt_doc["system"]
+    assert PROJECT_MARKER not in prompt_doc["user"]
+    assert prompt_doc["user"].rstrip().endswith(TRANSCRIPT)
 
 
 async def test_a_transcribe_trace_has_no_project_prompt_or_llm_section(
-    mode_factory: ModeFactory,
-    registry_factory: RegistryFactory,
     processor_factory: ProcessorFactory,
     transcriber_factory: Fake,
     llm_factory: Fake,
@@ -566,7 +528,6 @@ async def test_a_transcribe_trace_has_no_project_prompt_or_llm_section(
     processor = processor_factory(
         transcriber_factory(TRANSCRIPT),
         llm_factory(REPLY),
-        registry_factory(mode_factory("clean", requires_llm=True)),
         trace_writer=TraceWriter(trace_dir, 10),
     )
 
@@ -584,22 +545,21 @@ async def test_a_transcribe_trace_has_no_project_prompt_or_llm_section(
 
 
 async def test_a_transform_trace_has_no_audio_or_stt_section(
-    mode_factory: ModeFactory,
-    registry_factory: RegistryFactory,
+    prompt_factory: PromptFactory,
     processor_factory: ProcessorFactory,
     transcriber_factory: Fake,
     llm_factory: Fake,
     trace_dir: Path,
 ) -> None:
-    mode = mode_factory("clean", requires_llm=True, system_prompt=SYSTEM_WITH_PROJECT)
+    prompt = prompt_factory(system_prompt=SYSTEM_WITH_PROJECT)
     processor = processor_factory(
         transcriber_factory(TRANSCRIPT),
         llm_factory(REPLY),
-        registry_factory(mode),
+        prompt,
         trace_writer=TraceWriter(trace_dir, 10),
     )
 
-    await processor.transform_only(TRANSCRIPT, "clean", request_id="req-tx", project=PROJECT)
+    await processor.transform_only(TRANSCRIPT, request_id="req-tx", project=PROJECT)
     doc = only_trace(trace_dir)
 
     assert set(doc) == TRACE_KEYS
@@ -607,14 +567,13 @@ async def test_a_transform_trace_has_no_audio_or_stt_section(
     assert doc["audio"] is None
     assert doc["stt"] is None
     assert doc["project"]["text"] == PROJECT
+    assert doc["prompt"]["kind"] == "task"
     assert doc["prompt"]["user"] == TRANSCRIPT
     assert doc["output"]["text"] == REPLY
     assert doc["timings_ms"]["transcription"] == 0
 
 
 async def test_the_info_line_names_the_trace_file_it_wrote(
-    mode_factory: ModeFactory,
-    registry_factory: RegistryFactory,
     processor_factory: ProcessorFactory,
     transcriber_factory: Fake,
     llm_factory: Fake,
@@ -624,12 +583,11 @@ async def test_the_info_line_names_the_trace_file_it_wrote(
     processor = processor_factory(
         transcriber_factory(TRANSCRIPT),
         llm_factory(REPLY),
-        registry_factory(mode_factory("clean", requires_llm=True)),
         trace_writer=TraceWriter(trace_dir, 10),
     )
 
     with caplog.at_level(logging.INFO):
-        await processor.process(AUDIO, "clean", request_id="req-log")
+        await processor.process(AUDIO, request_id="req-log")
 
     assert f"trace={written(trace_dir)[0].name}" in caplog.text
     assert TRANSCRIPT not in caplog.text
@@ -659,8 +617,7 @@ def test_the_trace_records_who_called_and_which_project_file(
     settings_factory: Callable[..., Settings],
     transcriber_factory: Fake,
     llm_factory: Fake,
-    mode_factory: ModeFactory,
-    registry_factory: RegistryFactory,
+    prompt_factory: PromptFactory,
     processor_factory: ProcessorFactory,
     trace_dir: Path,
 ) -> None:
@@ -668,18 +625,16 @@ def test_the_trace_records_who_called_and_which_project_file(
     settings = settings_factory(llm_api_key=API_KEY)
     transcriber = transcriber_factory(TRANSCRIPT, ready=True)
     llm = llm_factory(REPLY, base_url=CREDENTIALED_URL)
-    modes = registry_factory(
-        mode_factory("context", requires_llm=True, system_prompt=SYSTEM_WITH_PROJECT)
-    )
+    prompt = prompt_factory(system_prompt=SYSTEM_WITH_PROJECT)
     state = state_factory(
         settings=settings,
         transcriber=transcriber,
         llm=llm,
-        modes=modes,
+        prompt=prompt,
         processor=processor_factory(
             transcriber,
             llm,
-            modes,
+            prompt,
             settings=settings,
             trace_writer=TraceWriter(trace_dir, 10),
         ),
@@ -691,7 +646,6 @@ def test_the_trace_records_who_called_and_which_project_file(
         "/v1/process",
         files={"audio": ("audio.wav", WAV, "audio/wav")},
         data={
-            "mode": "context",
             "project": PROJECT,
             "project_name": "jigward",
             "client_id": "vox-idea",

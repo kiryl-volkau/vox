@@ -26,8 +26,8 @@ from vox_server.glossary import Glossary
 from vox_server.health import ServerState
 from vox_server.llm import OpenAICompatibleClient
 from vox_server.models import TranscriptionResult
-from vox_server.modes import Mode, ModeRegistry
 from vox_server.processor import Processor
+from vox_server.prompt import Prompt
 from vox_server.trace import TraceWriter
 from vox_server.transcription import Transcriber
 
@@ -52,11 +52,15 @@ _SERVER_ENV_VARS = (
     "PROCESSING_CONCURRENCY",
     "LOG_LEVEL",
     "LOG_TEXT",
-    "MODES_DIR",
+    "PROMPT_PATH",
+    "DICTATION_PROMPT_PATH",
+    "LLM_DICTATION_TEMPERATURE",
     "GLOSSARY_PATH",
     "MAX_AUDIO_BYTES",
     "MAX_AUDIO_SECONDS",
     "MAX_PROJECT_BYTES",
+    "MAX_CONTEXT_BYTES",
+    "DEFAULT_LANGUAGE",
     "VOX_TRACE_DIR",
     "VOX_TRACE_KEEP",
 )
@@ -180,53 +184,34 @@ def make_wav_bytes(
     return buffer.getvalue()
 
 
-def make_mode(
-    name: str = "plain",
-    *,
-    label: str | None = None,
-    description: str = "",
-    requires_llm: bool = False,
-    wrap_for_claude: bool = False,
-    temperature: float | None = None,
-    fallback_to_transcript: bool = False,
+def make_prompt(
     system_prompt: str = "Ты редактор.",
     user_template: str = "{transcript}",
-    wrapper_template: str = "",
-) -> Mode:
-    """Build a Mode directly, bypassing the markdown parser."""
-    return Mode(
-        name=name,
-        label=label if label is not None else name.title(),
-        description=description,
-        requires_llm=requires_llm,
-        wrap_for_claude=wrap_for_claude,
-        temperature=temperature,
-        fallback_to_transcript=fallback_to_transcript,
-        system_prompt=system_prompt,
-        user_template=user_template,
-        wrapper_template=wrapper_template,
-    )
-
-
-def make_registry(*modes: Mode) -> ModeRegistry:
-    """Build a ModeRegistry from in-memory modes; with no arguments it holds one plain mode."""
-    return ModeRegistry(modes if modes else (make_mode(),))
+) -> Prompt:
+    """Build a Prompt directly, bypassing the markdown parser."""
+    return Prompt(system_prompt=system_prompt, user_template=user_template)
 
 
 def make_processor(
     transcriber: Any,
     llm: Any,
-    modes: ModeRegistry,
+    prompt: Prompt | None = None,
     *,
+    dictation_prompt: Prompt | None = None,
     glossary: Glossary | None = None,
     settings: Settings | None = None,
     trace_writer: TraceWriter | None = None,
 ) -> Processor:
-    """Wire a Processor around fake collaborators; without a writer nothing is traced."""
+    """Wire a Processor around fake collaborators; without a writer nothing is traced.
+
+    ``dictation_prompt`` defaults to a distinguishable second prompt, so a test that does not
+    care which one ran can still tell them apart in the recorded prompt text.
+    """
     return Processor(
         cast(Transcriber, transcriber),
         cast(OpenAICompatibleClient, llm),
-        modes,
+        prompt if prompt is not None else make_prompt(),
+        dictation_prompt if dictation_prompt is not None else make_prompt("Ты диктофон."),
         glossary if glossary is not None else Glossary(),
         settings if settings is not None else make_settings(),
         trace_writer,
@@ -238,7 +223,8 @@ def make_state(
     settings: Settings | None = None,
     transcriber: Any = None,
     llm: Any = None,
-    modes: ModeRegistry | None = None,
+    prompt: Prompt | None = None,
+    dictation_prompt: Prompt | None = None,
     glossary: Glossary | None = None,
     processor: Any = None,
     stt_error: str | None = None,
@@ -252,7 +238,8 @@ def make_state(
         started_at=time.monotonic(),
         transcriber=cast("Transcriber | None", transcriber),
         llm=cast("OpenAICompatibleClient | None", llm),
-        modes=modes,
+        prompt=prompt,
+        dictation_prompt=dictation_prompt,
         glossary=glossary,
         processor=cast("Processor | None", processor),
         stt_error=stt_error,
@@ -300,13 +287,8 @@ def wav_factory() -> Callable[..., bytes]:
 
 
 @pytest.fixture
-def mode_factory() -> Callable[..., Mode]:
-    return make_mode
-
-
-@pytest.fixture
-def registry_factory() -> Callable[..., ModeRegistry]:
-    return make_registry
+def prompt_factory() -> Callable[..., Prompt]:
+    return make_prompt
 
 
 @pytest.fixture

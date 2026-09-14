@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .config import Settings, redacted_base_url
 from .glossary import Glossary
+from .languages import normalise_language
 from .llm import OpenAICompatibleClient, clean_llm_output
 from .models import (
     ProcessResponse,
@@ -15,7 +16,7 @@ from .models import (
     TranscriptionResult,
     TransformResponse,
 )
-from .modes import Mode, ModeRegistry
+from .prompt import ProjectFile, Prompt, split_project_file
 from .trace import RequestTrace, TraceWriter
 from .transcription import Transcriber
 
@@ -23,15 +24,11 @@ logger = logging.getLogger(__name__)
 
 
 class ProcessingError(RuntimeError):
-    """Base class for failures of the transcribe -> normalise -> wrap pipeline."""
+    """Base class for failures of the transcribe -> formalise pipeline."""
 
 
 class EmptyTranscriptError(ProcessingError):
     """Speech recognition produced nothing but whitespace."""
-
-
-class EmptyOutputError(ProcessingError):
-    """Normalisation produced nothing and the mode has no transcript fallback."""
 
 
 def _elapsed_ms(start: float) -> int:
@@ -42,23 +39,24 @@ def _byte_length(text: str | None) -> int | None:
     return None if text is None else len(text.encode("utf-8"))
 
 
-def _truncate_project(project: str | None, max_bytes: int) -> str:
-    """Return ``project`` cut to at most ``max_bytes`` UTF-8 bytes, on a line boundary.
+def _truncate(text: str | None, max_bytes: int, what: str) -> str:
+    """Return ``text`` cut to at most ``max_bytes`` UTF-8 bytes, on a line boundary.
 
     ``None`` or blank text yields an empty string. Oversized text is truncated at the last
     newline that fits, or mid-line when there is none, and never rejected; a WARNING names
-    the original byte count. The text itself is never logged.
+    ``what`` and the original byte count. The text itself is never logged.
     """
-    if not project:
+    if not text:
         return ""
-    encoded = project.encode("utf-8")
+    encoded = text.encode("utf-8")
     if len(encoded) <= max_bytes:
-        return project
+        return text
     head = encoded[:max_bytes].decode("utf-8", errors="ignore")
     boundary = head.rfind("\n")
     kept = head[:boundary] if boundary > 0 else head
     logger.warning(
-        "project context of %d bytes exceeds max_project_bytes=%d; truncated to %d bytes",
+        "%s of %d bytes exceeds the %d byte budget; truncated to %d bytes",
+        what,
         len(encoded),
         max_bytes,
         len(kept.encode("utf-8")),
@@ -67,7 +65,15 @@ def _truncate_project(project: str | None, max_bytes: int) -> str:
 
 
 class Processor:
-    """Runs voice requests through STT, the mode's LLM prompt and the Claude wrapper.
+    """Runs voice requests through STT and one of the two prompts.
+
+    ``prompt`` formalises speech into a task; ``dictation_prompt`` only punctuates it and
+    strips filler. Which one a request uses is decided by the endpoint the caller chose, and
+    is never part of the request body.
+
+    The output language is per request and independent of the spoken one: speech recognition
+    keeps using ``settings.stt_language``, while the prompt's language block and the glossary
+    spellings follow whatever language the caller asked the answer to be written in.
 
     Concurrency is capped at ``settings.processing_concurrency`` (minimum 1) because a
     single GPU serialises Whisper anyway; further requests wait on ``semaphore``.
@@ -80,16 +86,18 @@ class Processor:
         self,
         transcriber: Transcriber,
         llm: OpenAICompatibleClient,
-        modes: ModeRegistry,
+        prompt: Prompt,
+        dictation_prompt: Prompt,
         glossary: Glossary,
         settings: Settings,
         trace_writer: TraceWriter | None = None,
     ) -> None:
         self._transcriber = transcriber
         self._llm = llm
-        self._modes = modes
-        self._glossary_entries = len(glossary)
-        self._glossary_block = glossary.as_prompt_block()
+        self._prompt = prompt
+        self._dictation_prompt = dictation_prompt
+        self._glossary = glossary
+        self._glossary_blocks: dict[str, str] = {}
         self._settings = settings
         self._trace_writer = trace_writer
         self._semaphore = asyncio.Semaphore(max(1, settings.processing_concurrency))
@@ -102,63 +110,69 @@ class Processor:
     async def process(
         self,
         audio: bytes,
-        mode_name: str,
         *,
         request_id: str,
+        dictation: bool = False,
         language: str | None = None,
         project: str | None = None,
         project_name: str | None = None,
+        context: str | None = None,
         client_id: str | None = None,
         client_version: str | None = None,
         audio_seconds: float | None = None,
     ) -> ProcessResponse:
-        """Transcribe ``audio``, normalise it with ``mode_name`` and wrap it for Claude.
+        """Transcribe ``audio`` and run it through one of the two prompts.
 
-        ``language`` overrides the configured STT language; ``None`` keeps the default.
-        ``project`` is the caller's project context file; it reaches the system prompt of
-        modes that use an LLM, truncated to ``max_project_bytes``, and is ignored by the
-        rest. ``project_name``, ``client_id``, ``client_version`` and ``audio_seconds`` are
-        what the caller reported about itself; they are only recorded, never acted on.
-        Raises UnknownModeError for an unknown mode (before any GPU work),
-        EmptyTranscriptError when nothing was recognised, EmptyOutputError when the mode
-        yields no text, plus TranscriptionError / LlmError from the underlying stages.
+        ``dictation`` picks the dictation prompt - punctuation and filler removal only -
+        instead of the task prompt. ``language`` is the language the answer must be written
+        in; ``None`` means ``settings.default_language``, and it does not change speech
+        recognition. ``project`` is the caller's ``.vox.md``, whose ``## SYSTEM`` section
+        becomes extra system instructions and whose remainder becomes project context, both
+        truncated to ``max_project_bytes``. ``context`` is the recent conversation the caller
+        chose to send, truncated to ``max_context_bytes``. ``project_name``, ``client_id``,
+        ``client_version`` and ``audio_seconds`` are what the caller reported about itself;
+        they are only recorded, never acted on. Raises EmptyTranscriptError when nothing was
+        recognised, plus TranscriptionError / LlmError from the underlying stages; a model
+        that answers with nothing falls back to the transcript rather than failing, so speech
+        is never lost.
         """
+        resolved = self._resolve_language(language)
         trace = RequestTrace(
             request_id=request_id,
             endpoint="process",
-            mode=mode_name,
+            prompt_kind="dictation" if dictation else "task",
+            output_language=resolved,
             client_id=client_id,
             client_version=client_version,
             client_audio_seconds=audio_seconds,
             audio_bytes=len(audio),
             project_name=project_name,
             project_received_bytes=_byte_length(project),
+            context_received_bytes=_byte_length(context),
         )
         started = time.perf_counter()
         try:
-            mode = self._modes.get(mode_name)
-            trace.mode = mode.name
             async with self._semaphore:
                 stt_started = time.perf_counter()
-                result = await asyncio.to_thread(self._transcriber.transcribe, audio, language)
+                result = await asyncio.to_thread(self._transcriber.transcribe, audio, None)
                 transcription_ms = _elapsed_ms(stt_started)
                 transcript = result.text.strip()
                 self._record_stt(trace, result, transcript, transcription_ms)
                 if not transcript:
                     raise EmptyTranscriptError("speech recognition produced an empty transcript")
                 llm_started = time.perf_counter()
-                normalized = await self._normalize(mode, transcript, project, trace)
-                llm_ms = _elapsed_ms(llm_started) if mode.requires_llm else 0
-                output = mode.render_wrapper(normalized)
-                timings = TimingsMs(
-                    transcription=transcription_ms, llm=llm_ms, total=_elapsed_ms(started)
+                output = await self._run_prompt(
+                    transcript, project, context, trace, dictation=dictation, language=resolved
                 )
-            self._record_output(trace, mode, output, timings)
+                timings = TimingsMs(
+                    transcription=transcription_ms,
+                    llm=_elapsed_ms(llm_started),
+                    total=_elapsed_ms(started),
+                )
+            self._record_output(trace, output, timings)
             return ProcessResponse(
                 request_id=request_id,
-                mode=mode.name,
                 transcript=transcript,
-                normalized_text=normalized,
                 output=output,
                 language=result.language,
                 timings_ms=timings,
@@ -180,13 +194,13 @@ class Processor:
     ) -> TranscribeResponse:
         """Transcribe ``audio`` without touching the LLM. Raises EmptyTranscriptError.
 
-        ``project`` is accepted so every entry point takes the same keywords, and ignored:
-        a raw transcript never reaches the LLM, so no trace records it either.
+        Here ``language`` is the *spoken* language handed to Whisper, not an output language,
+        because this endpoint returns speech as recognised and never reaches a prompt.
+        ``project`` is accepted so every entry point takes the same keywords, and ignored.
         """
         trace = RequestTrace(
             request_id=request_id,
             endpoint="transcribe",
-            mode="transcribe",
             audio_bytes=len(audio),
         )
         started = time.perf_counter()
@@ -217,40 +231,42 @@ class Processor:
     async def transform_only(
         self,
         text: str,
-        mode_name: str,
         *,
         request_id: str,
+        dictation: bool = False,
         project: str | None = None,
+        context: str | None = None,
+        language: str | None = None,
     ) -> TransformResponse:
-        """Run ``text`` through a mode's LLM prompt and wrapper, skipping speech recognition.
+        """Run already-transcribed ``text`` through a prompt, skipping speech recognition.
 
-        Empty or whitespace-only ``text`` raises EmptyTranscriptError. ``project`` is handled
-        exactly as in :meth:`process`.
+        Empty or whitespace-only ``text`` raises EmptyTranscriptError. ``dictation``,
+        ``project``, ``context`` and ``language`` are handled exactly as in :meth:`process`.
         """
+        resolved = self._resolve_language(language)
         trace = RequestTrace(
             request_id=request_id,
             endpoint="transform",
-            mode=mode_name,
+            prompt_kind="dictation" if dictation else "task",
+            output_language=resolved,
             project_received_bytes=_byte_length(project),
+            context_received_bytes=_byte_length(context),
         )
         source = text.strip()
         started = time.perf_counter()
         try:
-            mode = self._modes.get(mode_name)
-            trace.mode = mode.name
             if not source:
                 raise EmptyTranscriptError("no text to transform")
             async with self._semaphore:
                 llm_started = time.perf_counter()
-                normalized = await self._normalize(mode, source, project, trace)
-                llm_ms = _elapsed_ms(llm_started) if mode.requires_llm else 0
-                output = mode.render_wrapper(normalized)
+                output = await self._run_prompt(
+                    source, project, context, trace, dictation=dictation, language=resolved
+                )
+                llm_ms = _elapsed_ms(llm_started)
             timings = TimingsMs(transcription=0, llm=llm_ms, total=_elapsed_ms(started))
-            self._record_output(trace, mode, output, timings)
+            self._record_output(trace, output, timings)
             return TransformResponse(
                 request_id=request_id,
-                mode=mode.name,
-                normalized_text=normalized,
                 output=output,
                 timings_ms=timings,
             )
@@ -261,28 +277,58 @@ class Processor:
         finally:
             self._finish(trace, source)
 
-    async def _normalize(
-        self, mode: Mode, text: str, project: str | None, trace: RequestTrace
+    def _resolve_language(self, language: str | None) -> str:
+        return normalise_language(language) or self._settings.default_language
+
+    def _glossary_block(self, language: str) -> str:
+        block = self._glossary_blocks.get(language)
+        if block is None:
+            block = self._glossary.as_prompt_block(language)
+            self._glossary_blocks[language] = block
+        return block
+
+    async def _run_prompt(
+        self,
+        text: str,
+        project: str | None,
+        context: str | None,
+        trace: RequestTrace,
+        *,
+        dictation: bool,
+        language: str,
     ) -> str:
-        if not mode.requires_llm:
-            normalized = text
-        else:
-            context = _truncate_project(project, self._settings.max_project_bytes)
-            system = mode.render_system(context)
-            user = mode.render_user(text, self._glossary_block)
-            self._record_prompt(trace, mode, context, system, user)
-            llm_started = time.perf_counter()
-            raw = await self._llm.chat(system, user, temperature=mode.temperature)
-            trace.llm_duration_ms = _elapsed_ms(llm_started)
-            normalized = clean_llm_output(raw)
-            trace.llm_raw_output = raw
-            trace.llm_cleaned_output = normalized
-        normalized = normalized.strip()
-        if not normalized and mode.fallback_to_transcript:
-            normalized = text
-        if not normalized:
-            raise EmptyOutputError(f"mode '{mode.name}' produced no text")
-        return normalized
+        prompt = self._dictation_prompt if dictation else self._prompt
+        temperature = (
+            self._settings.llm_dictation_temperature
+            if dictation
+            else self._settings.llm_temperature
+        )
+        project_file = split_project_file(
+            _truncate(project, self._settings.max_project_bytes, "project context")
+        )
+        conversation = _truncate(context, self._settings.max_context_bytes, "conversation context")
+        glossary_block = self._glossary_block(language)
+        system = prompt.render_system(project_file, conversation, language)
+        user = prompt.render_user(text, glossary_block)
+        self._record_prompt(
+            trace, project_file, conversation, glossary_block, system, user, temperature
+        )
+        llm_started = time.perf_counter()
+        raw = await self._llm.chat(system, user, temperature=temperature)
+        trace.llm_duration_ms = _elapsed_ms(llm_started)
+        cleaned = clean_llm_output(raw).strip()
+        trace.llm_raw_output = raw
+        trace.llm_cleaned_output = cleaned
+        if cleaned:
+            return cleaned
+        # Losing what someone just said costs more than handing back an unpolished transcript,
+        # so an empty model reply degrades to the transcript instead of failing the request.
+        logger.warning(
+            "request_id=%s the model returned no usable text; falling back to the transcript",
+            trace.request_id,
+        )
+        trace.output_fell_back_to_transcript = True
+        return text
 
     def _record_stt(
         self,
@@ -302,21 +348,30 @@ class Processor:
         trace.transcription_ms = transcription_ms
 
     def _record_prompt(
-        self, trace: RequestTrace, mode: Mode, context: str, system: str, user: str
+        self,
+        trace: RequestTrace,
+        project: ProjectFile,
+        conversation: str,
+        glossary_block: str,
+        system: str,
+        user: str,
+        temperature: float,
     ) -> None:
-        trace.project_used_bytes = len(context.encode("utf-8"))
-        trace.project_text = context
-        trace.glossary_entries = self._glossary_entries
-        trace.glossary_prompt_block_chars = len(self._glossary_block)
+        trace.project_used_bytes = len(project.context.encode("utf-8"))
+        trace.project_text = project.context
+        trace.project_instructions = project.instructions
+        trace.context_used_bytes = len(conversation.encode("utf-8"))
+        trace.context_text = conversation
+        trace.glossary_entries = len(self._glossary)
+        trace.glossary_prompt_block_chars = len(glossary_block)
         trace.prompt_system = system
         trace.prompt_user = user
         trace.llm_model = self._llm.model
         trace.llm_base_url = redacted_base_url(self._llm.base_url)
-        trace.llm_temperature = mode.temperature
+        trace.llm_temperature = temperature
 
     @staticmethod
-    def _record_output(trace: RequestTrace, mode: Mode, output: str, timings: TimingsMs) -> None:
-        trace.output_wrapped_for_claude = mode.wrap_for_claude
+    def _record_output(trace: RequestTrace, output: str, timings: TimingsMs) -> None:
         trace.output_text = output
         trace.llm_ms = timings.llm
         trace.total_ms = timings.total
@@ -328,17 +383,20 @@ class Processor:
 
     def _log_result(self, trace: RequestTrace, source: str, trace_file: Path | None) -> None:
         logger.info(
-            "request_id=%s mode=%s audio_s=%.2f stt_ms=%d llm_ms=%d total_ms=%d out_chars=%d "
-            "project=%s project_bytes=%d system_chars=%d user_chars=%d trace=%s",
+            "request_id=%s audio_s=%.2f stt_ms=%d llm_ms=%d total_ms=%d out_chars=%d lang=%s "
+            "project=%s project_bytes=%d instructions_chars=%d context_bytes=%d "
+            "system_chars=%d user_chars=%d trace=%s",
             trace.request_id,
-            trace.mode,
             trace.audio_decoded_seconds or 0.0,
             trace.transcription_ms,
             trace.llm_ms,
             trace.total_ms,
             len(trace.output_text or ""),
+            trace.output_language or "-",
             trace.project_name or "-",
             trace.project_received_bytes or 0,
+            len(trace.project_instructions or ""),
+            trace.context_used_bytes or 0,
             len(trace.prompt_system or ""),
             len(trace.prompt_user),
             trace_file.name if trace_file is not None else "-",

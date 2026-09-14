@@ -11,6 +11,7 @@ from typing import Any, Literal
 logger = logging.getLogger(__name__)
 
 type Endpoint = Literal["process", "transcribe", "transform"]
+type PromptKind = Literal["task", "dictation"]
 type TraceStatus = Literal["ok", "error"]
 
 _UNSAFE_IN_NAME = re.compile(r"[^A-Za-z0-9_-]")
@@ -24,10 +25,9 @@ def _utc_now() -> datetime:
 class RequestTrace:
     """Everything one request did, accumulated stage by stage.
 
-    Only ``request_id``, ``endpoint`` and ``mode`` are known when the trace is created;
-    every other field is filled in by the stage that produces it, so a request that fails
-    half way still serialises into a useful document. ``mode`` holds the name exactly as the
-    caller asked for it until the registry resolves it.
+    Only ``request_id`` and ``endpoint`` are known when the trace is created; every other
+    field is filled in by the stage that produces it, so a request that fails half way still
+    serialises into a useful document.
 
     This object holds transcripts, prompts and model output in memory. It is written to disk
     only through :class:`TraceWriter`, which the server builds only when tracing is on.
@@ -35,7 +35,7 @@ class RequestTrace:
 
     request_id: str
     endpoint: Endpoint
-    mode: str
+    prompt_kind: PromptKind | None = None
     started_at: datetime = field(default_factory=_utc_now)
     status: TraceStatus = "ok"
     error_type: str | None = None
@@ -56,10 +56,17 @@ class RequestTrace:
     stt_duration_ms: int | None = None
     stt_transcript: str = ""
 
+    output_language: str | None = None
+
     project_name: str | None = None
     project_received_bytes: int | None = None
     project_used_bytes: int | None = None
     project_text: str | None = None
+    project_instructions: str | None = None
+
+    context_received_bytes: int | None = None
+    context_used_bytes: int | None = None
+    context_text: str | None = None
 
     glossary_entries: int | None = None
     glossary_prompt_block_chars: int = 0
@@ -74,8 +81,8 @@ class RequestTrace:
     llm_raw_output: str = ""
     llm_cleaned_output: str = ""
 
-    output_wrapped_for_claude: bool = False
     output_text: str | None = None
+    output_fell_back_to_transcript: bool = False
 
     transcription_ms: int = 0
     llm_ms: int = 0
@@ -98,14 +105,13 @@ class RequestTrace:
 
         A section that does not apply to the request is ``None`` rather than a dict of empty
         values: ``stt`` and ``audio`` for /v1/transform, ``project`` for /v1/transcribe, and
-        ``glossary``/``prompt``/``llm`` for a mode that never calls the model. A stage that
-        was reached but failed keeps whatever it managed to record.
+        ``glossary``/``prompt``/``llm`` for a request that never reached the model. A stage
+        that was reached but failed keeps whatever it managed to record.
         """
         return {
             "request_id": self.request_id,
             "started_at": self.started_at.astimezone(UTC).isoformat(),
             "endpoint": self.endpoint,
-            "mode": self.mode,
             "status": self.status,
             "error": self._error_section(),
             "client": {
@@ -115,7 +121,9 @@ class RequestTrace:
             },
             "audio": self._audio_section(),
             "stt": self._stt_section(),
+            "language": self.output_language,
             "project": self._project_section(),
+            "context": self._context_section(),
             "glossary": self._glossary_section(),
             "prompt": self._prompt_section(),
             "llm": self._llm_section(),
@@ -161,6 +169,18 @@ class RequestTrace:
             "used_bytes": used,
             "truncated": received is not None and used is not None and received != used,
             "text": self.project_text,
+            "instructions": self.project_instructions,
+        }
+
+    def _context_section(self) -> dict[str, Any] | None:
+        if self.endpoint == "transcribe":
+            return None
+        received, used = self.context_received_bytes, self.context_used_bytes
+        return {
+            "received_bytes": received,
+            "used_bytes": used,
+            "truncated": received is not None and used is not None and received != used,
+            "text": self.context_text,
         }
 
     def _glossary_section(self) -> dict[str, Any] | None:
@@ -174,6 +194,7 @@ class RequestTrace:
         if system is None:
             return None
         return {
+            "kind": self.prompt_kind,
             "system_chars": len(system),
             "user_chars": len(self.prompt_user),
             "system": system,
@@ -199,8 +220,8 @@ class RequestTrace:
         if text is None:
             return None
         return {
-            "wrapped_for_claude": self.output_wrapped_for_claude,
             "chars": len(text),
+            "fell_back_to_transcript": self.output_fell_back_to_transcript,
             "text": text,
         }
 

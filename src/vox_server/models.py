@@ -21,9 +21,7 @@ class TranscriptionResult(BaseModel):
 
 class ProcessResponse(BaseModel):
     request_id: str
-    mode: str
     transcript: str
-    normalized_text: str
     output: str
     language: str
     timings_ms: TimingsMs
@@ -38,28 +36,16 @@ class TranscribeResponse(BaseModel):
 
 class TransformRequest(BaseModel):
     text: str
-    mode: str = "clean"
+    dictation: bool = False
     project: str | None = None
+    context: str | None = None
+    language: str | None = None
 
 
 class TransformResponse(BaseModel):
     request_id: str
-    mode: str
-    normalized_text: str
     output: str
     timings_ms: TimingsMs
-
-
-class ModeInfo(BaseModel):
-    name: str
-    label: str
-    description: str
-    requires_llm: bool
-    wrap_for_claude: bool
-
-
-class ModesResponse(BaseModel):
-    modes: list[ModeInfo]
 
 
 class SttHealth(BaseModel):

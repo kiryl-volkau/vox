@@ -12,11 +12,24 @@
 #
 # Keys are lowercase spoken forms as they come out of the recognizer; values are what should appear
 # in the final text.
+#
+# A value is written in one of two forms:
+#   * a plain string - the same spelling is used whatever language the answer is written in. This
+#     is right for identifiers and for English terms that are kept as-is in every language;
+#   * a mapping of language code to spelling - used when the two languages legitimately differ, so
+#     the same Russian speech yields "постановка задачи" in a Russian answer and "task statement"
+#     in an English one. A language the entry does not mention simply drops out of that language's
+#     vocabulary block rather than borrowing another language's spelling.
+#
+# Whisper hotwords are taken from every spelling in every language, because what is spoken does not
+# depend on the language the answer will be written in.
 
 terms:
   "джигвард": "Jigward"
   "клауд код": "Claude Code"
   "кодекс": "Codex"
+  "промпт": "prompt"
+  "промпты": "prompts"
   "спринг": "Spring"
   "спринг бут": "Spring Boot"
   "спринг секьюрити": "Spring Security"
@@ -85,3 +98,37 @@ terms:
   "тайпскрипт": "TypeScript"
   "реакт": "React"
   "айдиа": "IntelliJ IDEA"
+
+  # Words of this project's own domain that are genuinely different in the two languages.
+  "постановка задачи":
+    ru: "постановка задачи"
+    en: "task statement"
+  "расшифровка":
+    ru: "расшифровка"
+    en: "transcript"
+  "диктовка":
+    ru: "диктовка"
+    en: "dictation"
+  "распознавание речи":
+    ru: "распознавание речи"
+    en: "speech recognition"
+  "запись":
+    ru: "запись"
+    en: "recording"
+  "плагин":
+    ru: "плагин"
+    en: "plugin"
+  "настройки":
+    ru: "настройки"
+    en: "settings"
+  "словарь проекта":
+    ru: "словарь проекта"
+    en: "project glossary"
+  "контекст проекта":
+    ru: "контекст проекта"
+    en: "project context"
+  "буфер обмена":
+    ru: "буфер обмена"
+    en: "clipboard"
+  "трейс": "trace"
+  "вокс": "vox"
