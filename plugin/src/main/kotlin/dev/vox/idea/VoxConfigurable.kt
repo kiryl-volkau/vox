@@ -6,6 +6,8 @@ import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.DialogPanel
 import com.intellij.openapi.ui.Messages
 import com.intellij.ui.SimpleListCellRenderer
+import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBPasswordField
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.Cell
 import com.intellij.ui.dsl.builder.RowLayout
@@ -20,12 +22,23 @@ import com.intellij.ui.dsl.builder.selected
 import com.intellij.util.ui.JBUI
 import java.time.Duration
 import javax.swing.DefaultComboBoxModel
+import javax.swing.JCheckBox
 
 /** Settings | Tools | Vox. */
 class VoxConfigurable : BoundConfigurable("Vox") {
 
     private val state = VoxSettings.getInstance().state
     private lateinit var urlField: Cell<JBTextField>
+
+    // The LLM connection belongs to the backend, so these are not bound to VoxSettings and are
+    // never stored by the IDE: Load reads them, Apply writes them, and the backend is the only
+    // copy. That also keeps the API key out of vox.xml.
+    private val llmBaseUrl = JBTextField()
+    private val llmModel = JBTextField()
+    private val llmApiKey = JBPasswordField()
+    private val llmKeyState = JBLabel("")
+    private val llmStatus = JBLabel(" ")
+    private var llmWarmup: JCheckBox? = null
 
     override fun createPanel(): DialogPanel = panel {
         group("Backend") {
@@ -73,6 +86,27 @@ class VoxConfigurable : BoundConfigurable("Vox") {
                     .bindSelected(state::insertIntoTerminal)
                     .comment("When no terminal is open the result goes to the clipboard instead.")
             }
+        }
+
+        group("Language model (on the backend)") {
+            row("Endpoint:") { cell(llmBaseUrl).columns(34) }
+            row("Model:") { cell(llmModel).columns(24) }
+            row("API key:") {
+                cell(llmApiKey).columns(24)
+                cell(llmKeyState)
+            }.rowComment(
+                "Stored by the backend, never by the IDE. Leave blank to keep the current key; " +
+                    "type a space to clear it for a local server that wants none."
+            )
+            row {
+                checkBox("Warm the model up at startup").applyToComponent { llmWarmup = this }
+                    .comment("Turn off for a hosted endpoint: there is nothing to load and the call is billed.")
+            }
+            row {
+                button("Load") { loadLlmConfig() }
+                button("Apply") { applyLlmConfig() }
+                cell(llmStatus)
+            }.topGap(TopGap.SMALL)
         }
 
         group("Context") {
@@ -135,6 +169,74 @@ class VoxConfigurable : BoundConfigurable("Vox") {
         val codes = VoxLanguages.optionsIncluding(current)
         return ComboBox(DefaultComboBoxModel(codes.toTypedArray())).apply {
             renderer = SimpleListCellRenderer.create("") { value -> VoxLanguages.label(value.orEmpty()) }
+        }
+    }
+
+    /** Reads the backend's LLM connection into the fields. */
+    private fun loadLlmConfig() {
+        withBackend("Vox: Reading the Backend Configuration") { it.readLlmConfig() }
+            ?.let(::showLlmConfig)
+    }
+
+    /**
+     * Sends only what was actually changed.
+     *
+     * A blank key field means "leave the key alone", which is why it is never sent as an empty
+     * string by accident: the backend reads "" as "clear the key", and silently unsetting the
+     * credential of a hosted endpoint every time somebody opens this page would be its own bug.
+     */
+    private fun applyLlmConfig() {
+        val typedKey = String(llmApiKey.password)
+        val update =
+            LlmConfigUpdate(
+                baseUrl = llmBaseUrl.text.trim().ifEmpty { null },
+                model = llmModel.text.trim().ifEmpty { null },
+                apiKey = if (typedKey.isEmpty()) null else typedKey.trim(),
+                warmup = llmWarmup?.isSelected,
+            )
+        val applied = withBackend("Vox: Applying the Backend Configuration") {
+            it.writeLlmConfig(update)
+        } ?: return
+        llmApiKey.text = ""
+        showLlmConfig(applied)
+        if (!applied.ready) {
+            Messages.showWarningDialog(
+                "The backend accepted the settings but cannot reach the model:\n" +
+                    "${applied.error.ifEmpty { "not ready" }}\n\nDictation will fail until this is resolved.",
+                TITLE,
+            )
+        }
+    }
+
+    private fun showLlmConfig(config: LlmConfig) {
+        llmBaseUrl.text = config.baseUrl
+        llmModel.text = config.model
+        llmWarmup?.isSelected = config.warmup
+        llmKeyState.text = if (config.apiKeySet) "a key is set" else "no key"
+        val source = if (config.overridden) "set from here" else "from the backend's .env"
+        llmStatus.text =
+            if (config.ready) "reachable · $source" else "NOT reachable: ${config.error.ifEmpty { "not ready" }}"
+    }
+
+    /** Runs [call] against the configured backend with a progress dialog; null on failure. */
+    private fun <T> withBackend(title: String, call: (VoxClient) -> T): T? {
+        val url = urlField.component.text.trim().trimEnd('/')
+        if (url.isEmpty()) {
+            Messages.showErrorDialog("Enter the backend URL first.", TITLE)
+            return null
+        }
+        return try {
+            ProgressManager.getInstance()
+                .runProcessWithProgressSynchronously<T, Exception>(
+                    { call(VoxClient(url, HEALTH_TIMEOUT)) },
+                    title,
+                    true,
+                    null,
+                )
+        } catch (e: Exception) {
+            llmStatus.text = e.message ?: "the backend is unreachable"
+            Messages.showErrorDialog(e.message ?: "the backend is unreachable", TITLE)
+            null
         }
     }
 

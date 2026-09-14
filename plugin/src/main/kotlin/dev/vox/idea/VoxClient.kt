@@ -47,6 +47,25 @@ class TransformRequest(
 
 class TransformResult(val requestId: String, val output: String, val totalMs: Int)
 
+/** The backend's LLM connection. The API key is reported as set or not, never returned. */
+class LlmConfig(
+    val baseUrl: String,
+    val model: String,
+    val apiKeySet: Boolean,
+    val warmup: Boolean,
+    val overridden: Boolean,
+    val ready: Boolean,
+    val error: String,
+)
+
+/** A partial change. A null field is left alone; an empty [apiKey] clears the key. */
+class LlmConfigUpdate(
+    val baseUrl: String? = null,
+    val model: String? = null,
+    val apiKey: String? = null,
+    val warmup: Boolean? = null,
+)
+
 class HealthResult(
     val status: String,
     val sttReady: Boolean,
@@ -122,6 +141,46 @@ class VoxClient(private val baseUrl: String, private val requestTimeout: Duratio
             totalMs = response.getAsJsonObject("timings_ms")?.get("total")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0,
         )
     }
+
+    /** Reads the backend's LLM connection. */
+    fun readLlmConfig(): LlmConfig =
+        parseLlmConfig(
+            send(HttpRequest.newBuilder(uri("/v1/config")).timeout(CONFIG_TIMEOUT).GET().build())
+        )
+
+    /**
+     * Changes the backend's LLM connection and returns what it became.
+     *
+     * The backend re-probes the new endpoint before answering, so the returned [LlmConfig.ready]
+     * and [LlmConfig.error] already say whether it works - the caller does not need a second
+     * health call to find out.
+     */
+    fun writeLlmConfig(update: LlmConfigUpdate): LlmConfig {
+        val body = JsonObject().apply {
+            update.baseUrl?.let { addProperty("base_url", it) }
+            update.model?.let { addProperty("model", it) }
+            update.apiKey?.let { addProperty("api_key", it) }
+            update.warmup?.let { addProperty("warmup", it) }
+        }
+        val request =
+            HttpRequest.newBuilder(uri("/v1/config"))
+                .timeout(CONFIG_TIMEOUT)
+                .header("Content-Type", "application/json; charset=utf-8")
+                .PUT(HttpRequest.BodyPublishers.ofString(body.toString(), StandardCharsets.UTF_8))
+                .build()
+        return parseLlmConfig(send(request))
+    }
+
+    private fun parseLlmConfig(body: JsonObject): LlmConfig =
+        LlmConfig(
+            baseUrl = body.stringOrEmpty("base_url"),
+            model = body.stringOrEmpty("model"),
+            apiKeySet = body.booleanOrFalse("api_key_set"),
+            warmup = body.booleanOrFalse("warmup"),
+            overridden = body.booleanOrFalse("overridden"),
+            ready = body.booleanOrFalse("ready"),
+            error = body.stringOrEmpty("error"),
+        )
 
     fun health(): HealthResult {
         val httpRequest =
@@ -228,6 +287,8 @@ class VoxClient(private val baseUrl: String, private val requestTimeout: Duratio
     private companion object {
         val CONNECT_TIMEOUT: Duration = Duration.ofSeconds(3)
         val HEALTH_TIMEOUT: Duration = Duration.ofSeconds(10)
+        // Longer than /health: a write re-probes the new endpoint before it answers.
+        val CONFIG_TIMEOUT: Duration = Duration.ofSeconds(20)
         const val MULTIPART_OVERHEAD_BYTES = 1024
 
         val ERROR_MESSAGES =

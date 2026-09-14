@@ -102,8 +102,32 @@ Settings | Tools | Vox, stored per application in `vox.xml`:
 | Exchanges to send        | 3                       | How many request/reply pairs are attached                |
 | Max conversation size    | 6000 bytes              | Oldest exchanges are dropped first                       |
 
-"Test Connection" calls `GET /health` and reports the backend status, the speech model and its
-device, and the language model.
+"Test Connection" calls `GET /health` and reports speech recognition and the language model
+separately, warning when either is not ready rather than printing a model name that the backend
+cannot actually reach.
+
+## The language model
+
+The **Language model (on the backend)** group configures the LLM the backend talks to, without
+editing `.env` or restarting a container:
+
+| Field | Meaning |
+|---|---|
+| Endpoint | Any OpenAI-compatible base URL - a local server, a box on the LAN, a hosted provider |
+| Model | The model id that endpoint serves |
+| API key | Blank leaves the current key alone; a space clears it for a local server that wants none |
+| Warm up at startup | Off for a hosted endpoint: there is nothing to load and the call is billed |
+
+**Load** reads what the backend is using; **Apply** writes it through `PUT /v1/config`. The backend
+reconfigures its live client, persists the change to a volume so it survives a restart, and
+re-probes the endpoint before answering - so Apply tells you immediately that a key is wrong
+instead of letting it surface as a timeout mid-dictation.
+
+The key is stored by the backend and never by the IDE, so there is no second copy of it in
+`vox.xml`. `.env` remains the boot default and the setting made here wins over it.
+
+Note that `PUT /v1/config` is unauthenticated and safe only because the backend binds to loopback.
+Anything already running as you could repoint it; never expose that port.
 
 ## Transcripts and the prompt bench
 

@@ -259,6 +259,15 @@ Two things to be clear-eyed about:
 Settings | Tools | Vox | Test Connection reports the LLM separately from speech recognition and
 warns when either is not ready, which is the failure you actually hit with a remote endpoint.
 
+None of this needs `.env` at all if you would rather not touch it: the same four settings are
+editable from the plugin, which writes them through `PUT /v1/config`. The backend reconfigures its
+running client, persists the change to the `vox-state` volume so it survives a restart, and
+re-probes the endpoint before answering. `.env` stays the boot default and the stored setting wins
+over it; delete the volume to fall back.
+
+`PUT /v1/config` is unauthenticated and safe only because the backend binds to loopback - anything
+already running as you could repoint where transcripts go. Never expose that port.
+
 ---
 
 ## Installation
