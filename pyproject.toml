@@ -113,5 +113,8 @@ disallow_untyped_calls = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-markers = ["integration: requires a running backend/GPU/network"]
-addopts = "-q -m 'not integration'"
+markers = [
+    "integration: requires a running backend/GPU/network",
+    "eval: grades real model output; requires a running backend and an LLM",
+]
+addopts = "-q -m 'not integration and not eval'"

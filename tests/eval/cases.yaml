@@ -1,0 +1,138 @@
+# Evaluation set for term recovery: what speech recognition mangled, and the canonical
+# English term the finished message has to carry instead.
+#
+# Every transcript here is written the way an ASR model actually gets it wrong - a Russian
+# sentence with an engineering term distorted into a near-homophone that means nothing. The
+# prompt promises to restore such a word when the context and the project glossary determine
+# it unambiguously, and these cases are what holds it to that promise.
+#
+# Fields:
+#   id             - stable identifier; it names the test case in pytest output.
+#   transcript     - the input, exactly as the recogniser would have produced it.
+#   language       - the language the answer must be written in.
+#   garbled        - the nonsense token that must NOT survive into the output.
+#   expect         - canonical terms that must appear. Matched at a word boundary and
+#                    open-ended at the end, so "prompt" is satisfied by "prompts".
+#   forbid         - terms that must NOT appear, because the speech never mentioned them.
+#                    This is the guard against a model that helpfully invents work. Matching
+#                    is open-ended at the end only, so an inflected word is written as its
+#                    stem: "тест" catches "тесты" and "тестах", while "тесты" catches neither.
+#   intent         - one line for the judge: what the speaker actually wanted.
+#   known_gap      - set only when the pipeline is known to fail the case today. The case
+#                    still runs and still counts towards the pass rate; it is marked xfail so
+#                    a red suite means a regression rather than a gap nobody has fixed yet.
+#                    Delete the field the moment the case starts passing - pytest reports an
+#                    unexpectedly passing case as XPASS, which is the reminder to do it.
+#
+# Terminology is deliberately English throughout `expect`: the glossary maps a spoken Russian
+# form onto the English identifier, and that identifier is what belongs in the answer in any
+# output language.
+
+cases:
+  - id: prompts
+    transcript: посмотри системные промытоты в этом сервисе они кажется дублируются
+    language: en
+    garbled: промытоты
+    expect: [prompt]
+    forbid: [test, migration, refactoring]
+    intent: Asks someone to look at the system prompts of a service because they may be duplicated.
+
+  # Deliberately unlike the worked examples inside prompt.md. An earlier version of this case
+  # echoed one of them almost word for word, and the model completed it from the example
+  # instead of from the speech - which measured recall of the prompt, not term recovery.
+  - id: membership
+    transcript: проверь почему мембершип не подтягивается у юзера после инвайта
+    language: en
+    garbled: мембершип
+    expect: [membership]
+    forbid: [test, pagination, CSV, endpoint]
+    intent: Asks to investigate why a user's membership is not loaded after an invite.
+
+  - id: liquibase
+    transcript: там миграция на ликви бейзе не накатилась посмотри почему
+    language: en
+    garbled: ликви бейзе
+    expect: [Liquibase, migration]
+    forbid: [test, rollback, index]
+    intent: Reports that a Liquibase migration did not apply and asks why.
+
+  - id: foreign-key
+    transcript: в этой таблице не хватает форин ки на организацию
+    language: en
+    garbled: форин ки
+    expect: [foreign key]
+    forbid: [index, migration, test]
+    intent: States that the table is missing a foreign key to organization.
+
+  - id: spring-boot
+    transcript: обнови спринг бут до последней версии и проверь что секьюрити не отвалилось
+    language: en
+    garbled: спринг бут
+    expect: [Spring Boot]
+    forbid: [test, migration]
+    intent: Asks to upgrade Spring Boot and verify that security still works.
+
+  - id: feature-flag
+    transcript: спрячь это под фича флаг пока не проверим на стейдже
+    language: en
+    garbled: фича флаг
+    expect: [feature flag]
+    forbid: [test, migration, rollback]
+    intent: Asks to put the change behind a feature flag until it is verified on staging.
+
+  - id: kubernetes
+    transcript: этот сервис в кубере падает по памяти посмотри лимиты
+    language: en
+    garbled: кубере
+    expect: [Kubernetes]
+    forbid: [test, migration, autoscaling]
+    intent: Reports that the service runs out of memory in Kubernetes and asks to check the limits.
+
+  - id: pull-request
+    transcript: я скинул пул реквест глянь там один коммит всего
+    language: en
+    garbled: пул реквест
+    expect: [PR, commit]
+    forbid: [test, rebase, merge]
+    intent: Says a pull request with a single commit was sent and asks for a look.
+
+  - id: repository-russian-output
+    transcript: вынеси этот запрос в репу а то он в контроллере висит
+    language: ru
+    garbled: репу
+    expect: [repository, controller]
+    forbid: [тест, migration, index]
+    intent: Asks to move a query out of the controller into the repository.
+    known_gap: >-
+      qwen2.5:7b applies the glossary to the word it was asked about and leaves the second
+      term alone, answering "вынеси запрос в repository; он висит в контроллере" - repository
+      taken from the glossary, controller not.
+
+  - id: prompts-russian-output
+    transcript: посмотри системные промытоты в этом сервисе они кажется дублируются
+    language: ru
+    garbled: промытоты
+    expect: [prompt]
+    forbid: [тест, migration]
+    intent: Asks someone to look at the system prompts of a service because they may be duplicated.
+
+  - id: cancelled-instruction
+    transcript: давай вынесем это в отдельный сервис хотя нет подожди не надо просто оставь в текущем классе и добавь метод
+    language: en
+    garbled: ""
+    expect: [method]
+    forbid: [separate service, extract]
+    intent: Withdraws the idea of a separate service and asks only to add a method to the current class.
+    known_gap: >-
+      qwen2.5:7b keeps the withdrawn instruction and joins the two with "however", answering
+      "Move this to a separate service. However, for now, leave it in the current class."
+      The prompt forbids this outright and even carries a worked example of it, so the gap is
+      in the model rather than in the wording; a larger LLM_MODEL is what closes it.
+
+  - id: nothing-invented
+    transcript: я просто посмотрел как отработал линтер и сколько заняла проверка
+    language: en
+    garbled: ""
+    expect: [linter]
+    forbid: [test, fix, refactor, migration]
+    intent: Reports having looked at how the linter ran and how long the check took. No task at all.
