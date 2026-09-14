@@ -9,7 +9,7 @@ name: CI
 # pass on CI only teaches people to ignore a red build.
 on:
   push:
-    branches: [master, main]
+    branches: [main]
   pull_request:
 
 concurrency:
