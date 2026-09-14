@@ -19,7 +19,7 @@ Three pieces:
   OpenAI-compatible LLM that turns spoken speech into a usable prompt;
 * an **IntelliJ IDEA plugin** - the primary client. It records, sends, and types the result straight
   into the terminal tab you are looking at, and it sends the open project's `.vox.md` as context;
-* a **native Windows companion** that owns a global hotkey, the microphone, an on-screen overlay,
+* a **native Windows companion** that owns two global hotkeys, the microphone, an on-screen overlay,
   the clipboard and the paste - for dictating into everything that is not the IDE.
 
 Nothing leaves the machine: no telemetry, no cloud API, no database, and audio is never written to
@@ -50,9 +50,9 @@ for it.
                   |                   /v1/process|    |                           |
   +---------------+------------------+           |    +- faster-whisper "turbo"   |
   | vox companion (native)           |           |    |  CTranslate2 + CUDA ------+--> RTX 5070 Ti
-  |   Ctrl+Alt+Space, held (pynput)  |           |    |                           |     16 GB
-  |   sounddevice, WAV kept in RAM   |           |    +- mode prompt              |
-  |   <focused project>/.vox.md      |           |    |  modes/<mode>.md          |
+  |   Ctrl+Alt+Space/D, held (pynput)|           |    |                           |     16 GB
+  |   sounddevice, WAV kept in RAM   |           |    +- prompts                  |
+  |   <focused project>/.vox.md      |           |    |  prompt.md, dictation.md  |
   |   clipboard + SendInput paste    |           |    |  + config/glossary.yaml   |
   |   overlay (never takes focus)    |           |    |  + .vox.md in the SYSTEM  |
   +----------------------------------+           |    |    message                |
@@ -94,20 +94,23 @@ client that already knows which project is open and which terminal tab you are l
 
 ### Which client to use when
 
-Both clients speak the same HTTP contract to the same backend, and both can run at once.
+Both clients speak the same HTTP contract to the same backend, and both can run at once. The plugin
+only ever calls `/v1/process`; the companion also has `/v1/dictate` behind its second hotkey.
 
 | | IntelliJ plugin | Windows companion |
 |---|---|---|
 | Where the text lands | Typed into the active Terminal tab | Pasted into whatever window has focus |
-| Trigger | A toggle: press to start, press to stop | Push-to-talk: hold, release to send |
+| Trigger | A toggle: press to start, press to stop | Push-to-talk: hold `record` or `dictate`, release to send |
+| Prompt | Always the task prompt - no dictation option | Task prompt on `record`, dictation prompt on `dictate` |
 | `.vox.md` | The open project's, automatically | The project whose folder name is in the focused window's title, and only if you listed its root in `client.yaml` |
-| Modes | One, chosen in Settings | Four, one per hotkey |
 | Needs | Nothing beyond the IDE | A Python install or `vox.exe`, plus a tray process |
 
 Use the **plugin** for talking to Claude Code, which is the whole point of the project: it knows the
 project, it knows the terminal, and it needs no configuration. Use the **companion** when the target
-is not an IDE terminal - a browser, a chat window, a commit dialog - or when you want push-to-talk
-and per-mode hotkeys rather than one toggle.
+is not an IDE terminal - a browser, a chat window, a commit dialog - or when you want its `dictate`
+hotkey, which returns your own words cleaned up instead of turned into a task (see
+[The prompts](#the-prompts)). The plugin has only one trigger and always runs the task prompt: there
+is no dictation prompt inside the IDE.
 
 ---
 
@@ -225,6 +228,37 @@ The weights live in the `ollama-models` volume, so the pull happens only once. R
 now on every `docker compose up` for this stack needs `--profile bundled-model`, or the `ollama`
 service will not start.
 
+### Option C - somebody else's hardware
+
+The LLM does not have to run on this machine. `LLM_BASE_URL` accepts any OpenAI-compatible
+endpoint - a box on the LAN, a company gateway, a hosted provider - and the client sends
+`Authorization: Bearer $LLM_API_KEY` with every call and probes `GET $LLM_BASE_URL/models` for
+readiness.
+
+```
+LLM_BASE_URL=https://api.example.com/v1
+LLM_MODEL=<the model id that endpoint serves>
+LLM_API_KEY=<a real key>
+LLM_WARMUP=false
+```
+
+This is how you take the LLM off the local GPU entirely: Whisper keeps it to itself, which frees
+roughly the size of the model you were running (~4.7 GB for a 7B Q4). Set `LLM_WARMUP=false` with
+it - the warmup completion exists to force a local model off disk into VRAM, so against a hosted
+endpoint it buys nothing and is billed like any other request.
+
+Two things to be clear-eyed about:
+
+- **Transcripts leave the machine.** The endpoint receives the transcript, your `.vox.md` and any
+  conversation context you send. Audio never does - Whisper still runs locally - but the text of
+  everything you dictate does. That is the one guarantee the local-only setup makes and this gives
+  up, so it should be a decision rather than a default.
+- **OpenAI-compatible means the chat completions protocol.** Anthropic's own Messages API is not
+  that, and pointing this at it will not work; it needs a different client, not a different URL.
+
+Settings | Tools | Vox | Test Connection reports the LLM separately from speech recognition and
+warns when either is not ready, which is the failure you actually hit with a remote endpoint.
+
 ---
 
 ## Installation
@@ -334,8 +368,10 @@ icon cannot be created the app logs it and keeps working.
 ## The IntelliJ plugin
 
 The primary client. It records the microphone, posts to the backend, reads `.vox.md` from the open
-project, and types the result into the terminal tab you are looking at. Built and tested against
-IntelliJ IDEA Ultimate 2026.2.2 (build IU-262.10315.125).
+project, and types the result into the terminal tab you are looking at. It always calls
+`POST /v1/process` and runs the task prompt - there is no dictation-prompt trigger in the IDE; use
+the companion's `dictate` hotkey for that (see [The prompts](#the-prompts)). Built and tested
+against IntelliJ IDEA Ultimate 2026.2.2 (build IU-262.10315.125).
 
 ### Building
 
@@ -387,7 +423,6 @@ moving Vox onto it in the keymap and dropping the paste binding.
 | Setting | Default | Meaning |
 |---|---|---|
 | Backend URL | `http://127.0.0.1:8765` | Root of the vox backend. |
-| Mode | `context` | `dictation`, `clean`, `task` or `context` - see [Modes](#modes). |
 | Request timeout | 180 s | The whole `/v1/process` round trip; the connect timeout is fixed at 3 s. |
 | Max recording | 120 s | The recording stops itself and is sent at the cap. |
 | Max `.vox.md` size | 8000 bytes | Larger files are truncated on a line boundary; `0` switches the project file off. |
@@ -432,27 +467,27 @@ memory. Nothing is written to disk.
 | `Ctrl+Alt+Shift+X` | Vox: Cancel Dictation | Throws the running recording away. |
 
 A toggle, not push-to-talk: an IDE action fires on key press and is never told the key went up, so
-there is no "release to send". The mode is a setting rather than a hotkey - one mode at a time, set
-in **Settings | Tools | Vox**. Both actions also sit in the **Tools** menu, and the status bar
+there is no "release to send". Both actions also sit in the **Tools** menu, and the status bar
 widget (`Vox`, `Vox ● REC`, `Vox …`) shows the state and starts a dictation when clicked.
 
 ### Everywhere else - the companion
 
-| Combo | Mode | What you get |
+| Combo | Action | What you get |
 |---|---|---|
-| `Ctrl+Alt+Space` | **context** | Cleaned request wrapped in an instruction that makes Claude Code resolve "this"/"here" against the real repository before implementing. |
-| `Ctrl+Alt+D` | **dictation** | Your words, punctuated. Nothing added, nothing rephrased. |
-| `Ctrl+Alt+C` | **clean** | A short, explicit, self-contained request. |
-| `Ctrl+Alt+T` | **task** | A fuller task statement with steps, constraints and open questions. |
+| `Ctrl+Alt+Space` | record | Push-to-talk: hold to capture, release to send. Runs the task prompt. |
+| `Ctrl+Alt+D` | dictate | Push-to-talk: hold to capture, release to send. Runs the dictation prompt - punctuation and filler removal, nothing reformulated. |
 | `Esc` | cancel | While recording: drops the audio, sends nothing. |
 
 Hold the combo while you speak; release it when you are done. Releasing the **trigger** key
-(`Space`, `D`, `C`, `T`) is what ends the recording - releasing `Ctrl` or `Alt` first does not, in
-any order. Keyboard auto-repeat is ignored, so recording starts exactly once per press.
+(`Space` for `record`, `D` for `dictate`) is what ends the recording - releasing `Ctrl` or `Alt`
+first does not, in any order. Keyboard auto-repeat is ignored, so recording starts exactly once per
+press.
 
 The modifier set must match exactly: `Ctrl+Alt+Shift+Space` is not `Ctrl+Alt+Space` and does
-nothing. A second mode's hotkey pressed while a recording or a request is in flight is ignored -
-there is never more than one recording at a time.
+nothing. Pressing either trigger again while a recording or a request is in flight is ignored -
+there is never more than one recording at a time, whichever combo started it. `record` and `dictate`
+must be different combos - a config where they match is rejected at startup with
+`hotkeys.dictate: must differ from hotkeys.record, or it never fires`.
 
 **Enter is never pressed automatically**, by either client. Recognition is good, not perfect, and a
 prompt you have not read is a prompt you did not write, so the text lands in the terminal and waits.
@@ -465,79 +500,142 @@ anything else sees it, so a `Ctrl+Space` hotkey would either never fire or fight
 `Ctrl+Alt+<key>` combos stay clear of the IntelliJ terminal. All of it is configurable - see
 [Changing hotkeys](#changing-hotkeys).
 
-While the companion works the overlay shows, in order: `CONTEXT - Recording 00:04` ->
-`Transcribing...` -> `Formatting...` -> `Ready`. It never takes focus: the window carries
+While the companion works the overlay shows, in order: `Recording 00:04` (or `Dictating 00:07` for
+the `dictate` combo) -> `Transcribing...` -> `Formatting...` -> `Ready`. It never takes focus: the
+window carries
 `WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`, so your caret stays where it was.
 
 ---
 
-## Modes
+## The prompts
 
-All four modes share the same hard rules, written into `modes/*.md`: never invent requirements,
-file names or acceptance criteria; never turn "посмотри"/"проверь" into "сделай"; never strip the
-uncertainty out of "может быть" or "проверь, реально ли"; never propose new layers, patterns,
-abstractions or refactorings that were not asked for; never translate identifiers or English
-engineering terms. Temperature stays low - modes reformat what you said, they do not invent. The
-glossary is injected as vocabulary, never substituted blindly into your sentence.
+The backend runs one of two prompts, chosen by the endpoint the caller uses: `prompt.md` in the
+repository root formalises the transcript into a task, and `dictation.md` beside it only cleans the
+transcript up without changing what it says. Both are a markdown file with a `## SYSTEM` section and
+a `## USER` section, no front matter, and both take the same placeholders, `{project}`, `{glossary}`
+and `{transcript}`.
 
-### dictation - `Ctrl+Alt+D`
+### The task prompt - `prompt.md`
 
-Punctuation, capitalisation, filler removal, and fixing mangled English terms. Nothing else. Use
-it for comments, commit messages, chat replies - anything where the words are already what you
-mean.
+`POST /v1/process` runs this one, at `LLM_TEMPERATURE` (default `0.1`). It turns the ASR transcript
+into a formalised engineering task, in Russian - one to four sentences saying what to do, and a
+bullet list only when you actually enumerated several distinct concrete things. There are no
+headings and no sections: uncertainty you spoke stays inside the sentences that carry it rather than
+being collected into a block at the end, which is the one shape a small local model reliably
+fabricates.
 
-```
-spoken:  я думаю это лучше оставить здесь потому что оно используется только в этом компоненте
-pasted:  Я думаю, это лучше оставить здесь, потому что оно используется только в этом компоненте.
-```
-
-### clean - `Ctrl+Alt+C`
-
-Turns rambling speech into one short explicit request. Best when the request is self-contained and
-does not depend on what is on your screen.
+Not every utterance is a task. Dictate a note about what you just did and you get that note, put in
+order - the prompt does not promote a report into an instruction or append a conclusion to it.
 
 ```
 spoken:  посмотри этот сервис тут мембершип почему-то второй раз достается проверь реально ли
          он нужен если нет убери только без новых слоев
 
-pasted:  Проверь, зачем в текущем сервисе membership загружается второй раз. Если второй lookup
-         действительно избыточен, убери его и обнови затронутые тесты. Не добавляй новые
-         архитектурные слои или абстракции без необходимости.
+pasted:  Посмотри этот сервис; тут membership почему-то второй раз достается. Проверь,
+         действительно ли он нужен; если нет, убери только без новых слоев.
 ```
 
-Note what survived: `membership` and `lookup` came back as identifiers (the glossary did that),
-"проверь" stayed a check instead of becoming an order, and the "без новых слоёв" constraint was
-kept explicitly.
+Note what survived: `мембершип` came back as the identifier `membership` (the glossary did that),
+"посмотри" and "проверь" stayed checks instead of becoming orders, the conditional stayed a
+conditional, and the "без новых слоёв" constraint kept the thing it qualified.
 
-### context - `Ctrl+Alt+Space` (the default)
+It guarantees:
 
-The same cleanup, except **references to context are deliberately left alone**. "здесь", "этот",
-"как мы делали для units" stay exactly as spoken, because the backend cannot see your repository
-and must not guess. The normalized request is then wrapped in a meta-prompt that tells Claude Code
-to resolve those references itself, against the real code, *before* writing anything.
+- **Nothing invented.** No requirement, file name, acceptance criterion, test or migration that was
+  not in the speech, and no characteristic attached to a thing that was not named - "индекс" stays
+  "индекс", never "составной индекс" or "уникальный индекс".
+- **The verb stays the verb.** "посмотри", "проверь", "глянь" never turn into "сделай" or
+  "реализуй".
+- **Conditions stay conditions, uncertainty stays uncertain.** "если ... то" is not turned into an
+  order; "может быть" and "проверь, реально ли" are not turned into a statement of fact.
+- **Negation, scope and constraints survive** attached to whatever they qualified in the speech:
+  "только в этом модуле", "не трогая тесты", "без новых слоёв".
+- **No unsolicited design.** No new layers, patterns, abstractions, interfaces, factories or
+  refactors that were not asked for.
+- **Identifiers and English engineering terms are never translated** - `compound`, `lookup`,
+  `index`, `migration`, `repository`, `endpoint`, and class, method, file, table and column names
+  stay exactly as said.
+- **A self-correction erases what it corrected.** Say "хотя нет, подожди, не надо, оставь как есть"
+  and only the final decision reaches the output - the retracted idea never comes back as a "но",
+  a "чтобы" or a future plan.
+- **A misheard word is fixed only when the fix is unambiguous** from context and the glossary;
+  otherwise it is left exactly as the recogniser produced it rather than guessed at.
+- Filler words and repeats are stripped; the answer is Russian throughout, with identifiers and
+  technical terms as the only exception.
 
-What gets pasted begins with:
+### The dictation prompt - `dictation.md`
+
+`POST /v1/dictate` runs this one instead, at `LLM_DICTATION_TEMPERATURE` (default `0.0`, sampling as
+greedily as the model allows - reproducing speech wants the least variance, not the most natural
+phrasing). Its job is the opposite of the task prompt's: punctuation, capitalisation, sentence
+breaks, filler removal and obvious ASR repairs, with broken grammatical agreement corrected - and
+nothing reformulated, reordered, added or dropped. This is the prompt for notes, chat messages and
+commit descriptions: anywhere you want your own words back, only cleaned up, rather than turned into
+a task.
 
 ```
-VOICE TASK - PROMPT ENRICHMENT MODE
+spoken:  ну э короче я думаю что э надо вот это вот проверить в общем
 
-Do NOT implement this. Do not edit, create or delete any file, ...
+pasted:  Я думаю, что это надо проверить.
 ```
 
-and ends with your normalized request between `---` fences. Claude Code then reads the repository,
-resolves "this service" into an actual class, and answers with one precise engineering prompt -
-which you read and send on. This is the mode for when you are looking at code and talking about
-what you see.
+The filler is gone and the sentence is capitalised and punctuated, but it is the same sentence in
+the same order - nothing here was reworded, split, merged or promoted into an instruction.
 
-### task - `Ctrl+Alt+T`
+It guarantees:
 
-For thinking out loud. Produces 1-3 sentences saying what to do, then - only if you actually spoke
-them - a short list of concrete steps, affected places and constraints, and finally, only if you
-expressed real uncertainty, an `Открытые вопросы` section listing what is unresolved. No
-uncertainty in the speech means that section is absent entirely.
+- **Nothing reformulated, reordered, merged or dropped.** Sentence order is speech order; even a
+  fragmented or unclear phrase stays in the answer, cleaned up rather than treated as noise.
+- **Filler, stutters and false starts are removed** - "ну", "короче", "как бы", "это самое", a
+  started-and-abandoned word, a word repeated twice in a row - deleted rather than folded into a
+  parenthetical.
+- **Broken agreement is fixed** - case, gender, number - without changing the words that were used.
+- **Nothing is invented and nothing becomes a task.** "посмотри" or "проверь" never turns into
+  "измени" or "сделай", and a note never grows a conclusion, requirement or next step it was not
+  given.
+- **Uncertainty and self-corrections behave exactly as in the task prompt** - hedges stay in, and a
+  retracted statement is dropped and never resurfaces.
+- **Identifiers, numbers and English terms are left exactly as said**; the glossary changes spelling
+  only, never content.
 
-`GET /v1/modes` returns the same list at runtime, with each mode's `requires_llm` and
-`wrap_for_claude` flags.
+### Which prompt runs
+
+Which prompt a request gets is decided entirely by the endpoint the caller uses - there is no "mode"
+field in any request body. The companion picks with its two hotkeys, `record` for the task prompt
+and `dictate` for the dictation one (see [Hotkeys](#hotkeys)); `POST /v1/transform`'s `dictation`
+field picks it when replaying text without a microphone (see [API](#api)). **The IntelliJ plugin has
+only one trigger and always calls `/v1/process`: there is no dictation prompt inside the IDE.**
+
+### When the model gives back nothing usable
+
+The LLM is always called, for either prompt. When it produces nothing usable, the request no longer
+fails: the raw transcript is returned instead, a WARNING is logged, and the trace records
+`output.fell_back_to_transcript: true` (see [Tracing a request](#tracing-a-request)) - losing what
+someone just said costs more than handing back an unpolished transcript.
+
+### Format and editing
+
+Placeholders are literal text replacement (`str.replace`, never `str.format`), so other braces in
+the prompt text are safe. `{project}` belongs in `## SYSTEM`: it is replaced with the caller's
+`.vox.md` wrapped in a delimited context block, or with nothing at all when there is none, so no
+empty heading is left behind - see [Project context](#project-context---voxmd). `{transcript}` and
+`{glossary}` belong in `## USER`, transcript last, for the reason given in that same section. A
+missing `## USER` section falls back to the transcript alone as the user message; a missing
+`## SYSTEM` section is a startup error - the server has nothing to serve without one. Both prompt
+files are parsed and rendered the same way.
+
+Edit `prompt.md` or `dictation.md` directly. **No code change is needed** - `vox-server` reads each
+file once at startup (`--prompt-path` / `PROMPT_PATH`, default `prompt.md`; `--dictation-prompt-path`
+/ `DICTATION_PROMPT_PATH`, default `dictation.md`). A native run just needs a restart; in Docker both
+files are baked into the image exactly like the glossary, so editing either needs a rebuild:
+
+```powershell
+docker compose up -d --build backend
+```
+
+`POST /v1/transform` replays either prompt against text you already have, without dictating
+anything - set `"dictation": true` in the body to try the dictation prompt instead of the task one.
+Handy for that edit-rebuild-try loop. See [API](#api).
 
 ---
 
@@ -615,6 +713,10 @@ That is under 1500 bytes - a fifth of the budget - and it is already most of the
 are the part people skip and should not: they teach the model the *shape* of a correct answer, which
 no amount of description does.
 
+This repository keeps its own `.vox.md` at its root, in Russian, as a real worked example of the
+same shape - what the project is, its module names, its HTTP contract and the constraints it must
+not violate.
+
 ### Turning it on
 
 The **plugin** needs no configuration. It reads `.vox.md` from the root of the open project, sends
@@ -644,13 +746,11 @@ all simply means no project context, and the request goes out without it.
 
 ### What the backend does with it
 
-`Mode.render_system(project)` replaces the literal `{project}` placeholder in the mode's `## SYSTEM`
-section. An empty value replaces it with nothing at all, so no dangling header is left behind; a
-non-empty one is wrapped in a delimited block that tells the model these are the repository's terms
-and constraints and that it must not add anything from them that was not asked for. The wrapper is
-built in `modes.py`, not in the mode files, so every mode behaves identically - all four ship with
-`{project}` at the end of their system prompt, and a mode that omits the placeholder simply never
-sees the text.
+`Prompt.render_system(project)` replaces the literal `{project}` placeholder in the `## SYSTEM`
+section of whichever prompt file the request uses. An empty value replaces it with nothing at all,
+so no dangling header is left behind; a non-empty one is wrapped in a delimited block that tells the
+model these are the repository's terms and constraints and that it must not add anything from them
+that was not asked for.
 
 Project text is never logged at `INFO`. The backend logs only the project name and the byte count;
 the text itself appears at `DEBUG`, and only with `LOG_TEXT=true`. The one thing that puts it on
@@ -666,19 +766,18 @@ Edit `hotkeys` in `config/client.yaml`:
 
 ```yaml
 hotkeys:
-  bindings:
-    context: "ctrl+alt+space"
-    dictation: "ctrl+alt+d"
-    clean: "ctrl+alt+c"
-    task: "ctrl+alt+t"
+  record: "ctrl+alt+space"
+  dictate: "ctrl+alt+d"
   cancel: "esc"
 ```
 
 A binding is `mod+mod+key`: modifiers are `ctrl`, `alt`, `shift`, `win` (aliases `control`,
 `option`, `cmd`/`super`/`meta`/`windows` are accepted), and exactly one trigger key -
-`space`, `esc`, `a`-`z`, `0`-`9`, `f1`-`f12`. The key on the left of the colon is the mode name,
-which must match a file in `modes/`. Restart the companion to apply. An unparseable combo makes
-the companion exit with `hotkey error: ...` instead of starting half-configured.
+`space`, `esc`, `a`-`z`, `0`-`9`, `f1`-`f12`. `record` and `dictate` must parse to different combos,
+or the companion refuses to start with `hotkeys.dictate: must differ from hotkeys.record, or it
+never fires`. Restart the companion to apply. An unparseable combo, or one whose trigger key the
+listener never reports, makes the companion exit with `config error: ...` instead of starting
+half-configured.
 
 ### Adding glossary words
 
@@ -697,70 +796,6 @@ on the transcript**, so adding an entry cannot corrupt a sentence that happens t
 syllables. Keys are lowercase spoken forms as the recogniser produces them.
 
 The glossary is baked into the image, so apply changes with:
-
-```powershell
-docker compose up -d --build backend
-```
-
-### Adding a mode
-
-Drop a new `modes/<name>.md` in place. **No Python change is needed** - the registry reads every
-`*.md` in the directory at startup, and the client picks the mode up as soon as you bind a hotkey
-to its name.
-
-```markdown
----
-name: commit
-label: Commit
-description: "Спонтанная речь превращается в одно сообщение коммита."
-requires_llm: true
-wrap_for_claude: false
-temperature: 0.1
-fallback_to_transcript: true
----
-
-## SYSTEM
-Ты — редактор сообщений коммитов. На вход приходит ASR-расшифровка устной речи разработчика.
-Сформулируй одно сообщение коммита в повелительном наклонении, не длиннее одной строки.
-Ничего не выдумывай: только то, что было сказано.
-Формат ответа: ТОЛЬКО строка сообщения, без преамбул, кавычек и markdown-ограждений.
-
-{project}
-
-## USER
-Словарь проекта:
-{glossary}
-
-Расшифровка:
-{transcript}
-
-## WRAPPER
-```
-
-Front-matter defaults if you omit a key: `name` = the filename stem, `label` = `name.title()`,
-`description` = empty, `requires_llm` = `true`, `wrap_for_claude` = `false`,
-`fallback_to_transcript` = `false`, `temperature` = the server default (`LLM_TEMPERATURE`).
-
-The three sections are split on lines that are exactly `## SYSTEM`, `## USER` and `## WRAPPER`.
-Placeholders are literal text replacement, not `str.format`, so braces elsewhere in your prompt are
-safe: `{project}` in the SYSTEM section, `{transcript}` and `{glossary}` in the USER section,
-`{normalized}` in the WRAPPER section. `## WRAPPER` may be left empty unless `wrap_for_claude` is
-`true`, in which case it is required (and a mode with `requires_llm: true` and an empty
-`## SYSTEM` is rejected at startup).
-
-Put `{project}` **last** in the SYSTEM section and never anywhere else. It is replaced with the
-whole context block, header included, or with nothing at all, so an empty project file leaves no
-dangling heading behind; a mode without the placeholder simply never receives project context. The
-transcript must stay last in the USER message for the reason in
-[Project context](#project-context---voxmd).
-
-Then bind it and restart both sides:
-
-```yaml
-hotkeys:
-  bindings:
-    commit: "ctrl+alt+m"
-```
 
 ```powershell
 docker compose up -d --build backend
@@ -824,7 +859,8 @@ not an override, so the container keeps working on environment variables alone.
 | `--llm-timeout-seconds` | `LLM_TIMEOUT_SECONDS` | `120.0` |
 | `--llm-temperature` | `LLM_TEMPERATURE` | `0.1` |
 | `--llm-max-tokens` | `LLM_MAX_TOKENS` | `1024` |
-| `--modes-dir` | `MODES_DIR` | `modes` |
+| `--prompt-path` | `PROMPT_PATH` | `prompt.md` |
+| `--dictation-prompt-path` | `DICTATION_PROMPT_PATH` | `dictation.md` |
 | `--glossary-path` | `GLOSSARY_PATH` | `config/glossary.yaml` |
 | `--processing-concurrency` | `PROCESSING_CONCURRENCY` | `1` |
 | `--log-level` | `LOG_LEVEL` | `INFO` |
@@ -834,9 +870,12 @@ not an override, so the container keeps working on environment variables alone.
 
 `--version` prints the version and exits, and `--help` lists the same options. The remaining
 settings stay environment-only, because they are set once and never per launch: `STT_VAD_FILTER`,
-`STT_GLOSSARY_HOTWORDS`, `LLM_API_KEY`, `MAX_AUDIO_BYTES`, `MAX_AUDIO_SECONDS` and
-`MAX_PROJECT_BYTES` (8000, the ceiling on project context - see
-[Project context](#project-context---voxmd)).
+`STT_GLOSSARY_HOTWORDS`, `LLM_API_KEY`, `LLM_DICTATION_TEMPERATURE` (`0.0`, the sampling temperature
+the dictation prompt uses instead of `LLM_TEMPERATURE` - see [The prompts](#the-prompts)),
+`MAX_AUDIO_BYTES`, `MAX_AUDIO_SECONDS`, `MAX_PROJECT_BYTES` (8000, the ceiling on project context
+- see [Project context](#project-context---voxmd)), `MAX_CONTEXT_BYTES` (6000, the ceiling on the
+conversation context a client may attach) and `DEFAULT_LANGUAGE` (`en`, the language answers are
+written in when a request asks for no particular one).
 
 ### Running the backend natively
 
@@ -850,9 +889,9 @@ uv run vox-server --llm-base-url http://127.0.0.1:11434/v1 --stt-model small --l
 
 Note `127.0.0.1` rather than `host.docker.internal`: outside a container the model server is just
 localhost. Paths resolve against the working directory, so run this from the repo root or pass
-`--modes-dir` and `--glossary-path` as well. A native run has to supply its own CUDA and cuDNN
-runtime for CTranslate2 - which is precisely what the container exists to avoid - so on Windows
-expect `stt.device` to come up `cpu` unless you have already installed them.
+`--prompt-path`, `--dictation-prompt-path` and `--glossary-path` as well. A native run has to supply
+its own CUDA and cuDNN runtime for CTranslate2 - which is precisely what the container exists to
+avoid - so on Windows expect `stt.device` to come up `cpu` unless you have already installed them.
 
 The image runs `python -m vox_server.main` with no arguments, so the container is configured
 entirely through `.env`; to pass a flag there instead, add a `command:` to the backend service in
@@ -966,7 +1005,7 @@ command is the part people forget.
 .\scripts\show-trace.ps1 -RequestId 3f9a1c07 -Full    # one request; a unique prefix is enough
 ```
 
-`-List` prints time, request id, mode, project, status and total ms - enough to find the request you
+`-List` prints time, request id, project, status and total ms - enough to find the request you
 mean. The id is also in the backend log line for that request and in the response's `X-Request-ID`
 header. `-TraceDir` points the script at a directory other than `traces`. With nothing to show it
 prints how to switch tracing on and exits 0; an unknown request id exits 1. A file that is not
@@ -990,7 +1029,6 @@ Trimmed, with the long text cut - a real file carries all of it:
   "request_id": "3f9a1c07b2d4",
   "started_at": "2026-09-12T14:22:33.518291+00:00",
   "endpoint": "process",
-  "mode": "clean",
   "status": "ok",
   "error": null,
   "client": { "id": "vox-idea", "version": "0.1.0", "audio_seconds": 6.4 },
@@ -1006,6 +1044,7 @@ Trimmed, with the long text cut - a real file carries all of it:
   },
   "glossary": { "entries": 71, "prompt_block_chars": 1786 },
   "prompt": {
+    "kind": "task",
     "system_chars": 2274, "user_chars": 1902,
     "system": "Ты редактор ... ## Контекст проекта\n# Jigward\n...",
     "user": "## Словарь\n... ## Текст\nпосмотри этот сервис тут мембершип ..."
@@ -1019,7 +1058,8 @@ Trimmed, with the long text cut - a real file carries all of it:
     "cleanup_changed": true
   },
   "output": {
-    "wrapped_for_claude": false, "chars": 67,
+    "chars": 67,
+    "fell_back_to_transcript": false,
     "text": "Проверь, зачем в текущем сервисе membership загружается второй раз."
   },
   "timings_ms": { "transcription": 380, "llm": 910, "total": 1298 }
@@ -1028,12 +1068,13 @@ Trimmed, with the long text cut - a real file carries all of it:
 
 | What you want to know | Where to look |
 |---|---|
-| Did Whisper mishear me? | `stt.transcript` - the exact text that went on to the model, before any mode touched it. `stt.language` with `language_probability`, and `audio.decoded_seconds` against `client.audio_seconds`, say whether it heard the right language and the whole recording. |
+| Did Whisper mishear me? | `stt.transcript` - the exact text that went on to the model, before the prompt touched it. `stt.language` with `language_probability`, and `audio.decoded_seconds` against `client.audio_seconds`, say whether it heard the right language and the whole recording. |
 | Did my `.vox.md` get picked up? | `project.name` and `project.used_bytes`. A `null` name means the request carried no project context at all - the client decided that, and its own log says why. `truncated: true` means the file was over `MAX_PROJECT_BYTES` (8000) and the tail was dropped. `project.text` is the context the model actually saw, not the file on disk. |
 | Did the cleanup eat my text? | `llm.cleanup_changed`. When it is `true`, read `llm.raw_output` against `llm.cleaned_output`: the cleanup strips code fences, quoting and model preamble, and this is where you see it taking a bite it should not have. |
-| Why did the model answer *that*? | `prompt.system` and `prompt.user`, verbatim and complete - the mode's instructions plus the project context in the system prompt, the glossary and your transcript in the user message, transcript last. `llm.model` and `llm.temperature` say who answered and how loosely. |
+| Why did the model answer *that*? | `prompt.system` and `prompt.user`, verbatim and complete - the prompt's instructions plus the project context in the system prompt, the glossary and your transcript in the user message, transcript last. `llm.model` and `llm.temperature` say who answered and how loosely. |
+| Which prompt ran, task or dictation? | `prompt.kind`. `endpoint` cannot tell you: it names the pipeline stage, not the HTTP path, so both `/v1/process` and `/v1/dictate` write `endpoint: "process"`. |
 | Why was it slow? | `timings_ms` - `transcription` against `llm` says which half to blame. A slow first half with `stt.device: "cpu"` is the CUDA fallback; a slow `llm` half is usually a model too big for the GPU (see the VRAM note above). `stt.duration_ms` and `llm.duration_ms` are the stages themselves, the `timings_ms` pair the wall clock around them. |
-| What was actually delivered? | `output.text` - what the plugin typed or the companion pasted - and `output.wrapped_for_claude` for whether the mode's wrapper was applied on top of `llm.cleaned_output`. |
+| What was actually delivered? | `output.text` - what the plugin typed or the companion pasted, identical to `llm.cleaned_output` unless `output.fell_back_to_transcript` is `true`, in which case it is the raw transcript instead. |
 | It failed - on what? | `status` is `"error"`, and `error.type` / `error.message` name the exception. Failed requests are traced too, with every stage that completed before the failure filled in, which is usually the point. |
 
 Sections that do not apply to a request are `null` rather than empty: `audio` and `stt` for
@@ -1084,7 +1125,7 @@ docker compose logs -f backend
 ```
 
 ```
-request_id=3f9a1c07b2d4 mode=clean audio_s=6.43 stt_ms=380 llm_ms=910 total_ms=1298 out_chars=67 project=Jigward project_bytes=1840 system_chars=2274 user_chars=1902 trace=20260912-142233-518-3f9a1c07b2d4.json
+request_id=3f9a1c07b2d4 audio_s=6.43 stt_ms=380 llm_ms=910 total_ms=1298 out_chars=67 project=Jigward project_bytes=1840 system_chars=2274 user_chars=1902 trace=20260912-142233-518-3f9a1c07b2d4.json
 ```
 
 There is no transcript in it, by design. `project=` is the name the client reported and
@@ -1096,16 +1137,17 @@ log - a debugging switch, not a setting (see [Privacy](#privacy)). For the text 
 whole prompt, use [tracing](#tracing-a-request) rather than turning the log up.
 
 The companion logs to `%LOCALAPPDATA%\vox\client.log` (rotated at 1 MB, two old files kept) - it
-has no console of its own when `start.ps1` launches it - and prints one INFO line per dictation
+has no console of its own when `start.ps1` launches it - and prints one INFO line per recording
 before it sends:
 
 ```
-sending mode=context project=Jigward project_file=C:\src\Jigward\.vox.md project_bytes=1840 truncated=False project_status=ok window=328964
+sending prompt=task project=Jigward project_file=C:\src\Jigward\.vox.md project_bytes=1840 truncated=False project_status=ok window=328964
 ```
 
-`project_status` is why the project context is or is not there: `ok`, `off` (detection disabled or
-no usable window title), `no-match` (no configured root's folder name occurs in the window title),
-or `missing` / `unreadable` / `empty` for a root that matched but whose file could not be used.
+`prompt` is `task` or `dictation`, whichever combo was held down. `project_status` is why the
+project context is or is not there: `ok`, `off` (detection disabled or no usable window title),
+`no-match` (no configured root's folder name occurs in the window title), or `missing` /
+`unreadable` / `empty` for a root that matched but whose file could not be used.
 `logging.level: DEBUG` in `config/client.yaml` adds the rest. The plugin logs into the IDE's own
 `idea.log`.
 
@@ -1119,25 +1161,35 @@ always `{"error": "...", "detail": "..."}` - never a stack trace, never the API 
 | Method | Path | Body | Returns |
 |---|---|---|---|
 | `GET` | `/health` | - | `HealthResponse`. Always HTTP 200; read `status` (`ready` / `warming` / `degraded`). |
-| `GET` | `/v1/modes` | - | `{"modes": [{name, label, description, requires_llm, wrap_for_claude}]}` |
-| `POST` | `/v1/process` | multipart: `audio` (WAV), `mode` (default `context`), optional `project`, `project_name`, `audio_seconds`, `client_id`, `client_version` | `ProcessResponse` - the full pipeline. |
+| `POST` | `/v1/process` | multipart: `audio` (WAV), optional `project`, `project_name`, `context`, `language`, `audio_seconds`, `client_id`, `client_version` | `ProcessResponse` - the full pipeline, task prompt. |
+| `POST` | `/v1/dictate` | Same fields as `/v1/process` | Same shape as `ProcessResponse` - the full pipeline, dictation prompt instead. |
 | `POST` | `/v1/transcribe` | multipart: `audio`, optional `language` | `{request_id, transcript, language, timings_ms}` - STT only, no LLM. |
-| `POST` | `/v1/transform` | JSON `{"text": "...", "mode": "clean", "project": null}` | `{request_id, mode, normalized_text, output, timings_ms}` - replay a mode on existing text, no STT. Handy for iterating on a prompt. |
+| `POST` | `/v1/transform` | JSON `{"text": "...", "dictation": false, "project": null, "context": null, "language": null}` | `{request_id, output, timings_ms}` - replay a prompt on existing text, no STT. `dictation: true` picks the dictation prompt. Handy for iterating on either prompt. |
+
+Which prompt runs is decided by the path (`/v1/process` vs `/v1/dictate`), or by the `dictation`
+field for `/v1/transform` - there is no "mode" field anywhere else in a request body. The two audio
+endpoints are otherwise identical, down to the response shape; see [The prompts](#the-prompts).
 
 `project` is the raw text of the caller's [`.vox.md`](#project-context---voxmd), already truncated
 by the client; the server truncates again at `max_project_bytes` and warns rather than failing the
-request. `project_name` is a short name used for log lines only and never reaches the model.
+request, then splits off its `## SYSTEM` section as extra system instructions. `project_name` is a
+short name used for log lines only and never reaches the model. `context` is recent conversation
+the caller chose to attach so speech can refer to it, truncated at `max_context_bytes` the same way.
 `client_id` identifies the caller in the logs - `vox-windows` for the companion, `vox-idea` for the
 plugin.
+
+`language` is the language the **answer** is written in, defaulting to `DEFAULT_LANGUAGE` (`en`). It
+is deliberately not the spoken language: speech recognition keeps using `STT_LANGUAGE`, so Russian
+speech can produce an English task. It selects the prompt file's `## LANGUAGE <code>` section and
+the matching spellings in the glossary. On `/v1/transcribe`, which returns speech as recognised and
+never reaches a prompt, `language` means the spoken language instead.
 
 `POST /v1/process`:
 
 ```json
 {
   "request_id": "3f9a1c07b2d4",
-  "mode": "clean",
   "transcript": "посмотри этот сервис тут мембершип почему-то второй раз достается",
-  "normalized_text": "Проверь, зачем в текущем сервисе membership загружается второй раз.",
   "output": "Проверь, зачем в текущем сервисе membership загружается второй раз.",
   "language": "ru",
   "timings_ms": { "transcription": 380, "llm": 910, "total": 1298 }
@@ -1145,13 +1197,15 @@ plugin.
 ```
 
 `output` is what the client delivers - typed into the terminal by the plugin, pasted by the
-companion. For `wrap_for_claude` modes (`context`) it is `normalized_text` embedded in that mode's
-wrapper; otherwise the two are identical.
+companion. `POST /v1/dictate` returns the identical shape, with `output` punctuated rather than
+formalised.
 
-Error codes: `unknown_mode` (400), `empty_audio` (400), `audio_too_large` (413),
-`invalid_request` (422), `empty_transcript` (422), `empty_llm_output` (502), `llm_error` (502),
-`stt_unavailable` (503), `llm_unavailable` (503), `warming` (503), `llm_timeout` (504),
-`internal_error` (500).
+Error codes: `empty_audio` (400), `audio_too_large` (413), `invalid_request` (422),
+`empty_transcript` (422), `llm_error` (502), `stt_unavailable` (503), `llm_unavailable` (503),
+`warming` (503), `llm_timeout` (504), `internal_error` (500). An empty or unusable model reply is
+not one of these any more: the request falls back to the raw transcript instead of failing (see
+[The prompts](#the-prompts)), and only a WARNING in the log and `output.fell_back_to_transcript` in
+[a trace](#tracing-a-request) say that it happened.
 
 Interactive docs are at <http://127.0.0.1:8765/docs>.
 
@@ -1242,14 +1296,12 @@ vox/
 ├─ pyproject.toml                deps (server / client extras), ruff, mypy, pytest config
 ├─ uv.lock
 ├─ .env.example                  every backend setting, documented; copy to .env
+├─ prompt.md                     the task prompt: SYSTEM + USER, {project}/{glossary}/{transcript}
+├─ dictation.md                  the dictation prompt: same format, punctuates instead of formalising
+├─ .vox.md                       this repository's own project context, as a worked example
 ├─ config/
 │  ├─ client.example.yaml        every companion setting; copy to client.yaml
 │  └─ glossary.yaml              spoken form -> canonical engineering term
-├─ modes/
-│  ├─ context.md                 default; keeps references, wraps for Claude Code
-│  ├─ dictation.md               punctuation only
-│  ├─ clean.md                   short explicit request
-│  └─ task.md                    expanded task + open questions
 ├─ scripts/                      install-client.ps1, start.ps1, stop.ps1,
 │                               build-client.ps1, smoke-test.ps1, show-trace.ps1
 ├─ plugin/                       the IntelliJ IDEA plugin (Kotlin, Gradle)
@@ -1259,7 +1311,8 @@ vox/
 │  └─ src/main/
 │     ├─ kotlin/dev/vox/idea/    actions, recorder, HTTP client, terminal inserter,
 │     │                          settings page, status widget, .vox.md reader
-│     └─ resources/META-INF/     plugin.xml, optional Terminal dependency, icon
+│     └─ resources/              plugin.xml, optional Terminal dependency,
+│                                plugin icon + action icons (light/dark)
 ├─ src/
 │  ├─ vox_server/
 │  │  ├─ main.py                 create_app(), lifespan, uvicorn entry point
@@ -1267,10 +1320,10 @@ vox/
 │  │  ├─ config.py               pydantic-settings, env vars
 │  │  ├─ models.py               request/response models
 │  │  ├─ transcription.py        device resolution, WAV decoding, faster-whisper
-│  │  ├─ modes.py                mode file parsing and registry
+│  │  ├─ prompt.py               prompt file format: parsing and rendering, shared by both prompts
 │  │  ├─ glossary.py             glossary loading and prompt rendering
 │  │  ├─ llm.py                  OpenAI-compatible client, output cleanup
-│  │  ├─ processor.py            STT -> mode -> LLM -> wrapper pipeline
+│  │  ├─ processor.py            STT -> prompt -> LLM pipeline
 │  │  ├─ trace.py                opt-in per-request JSON trace (VOX_TRACE_DIR)
 │  │  └─ health.py               server state and /health assembly
 │  └─ vox_client/
@@ -1286,7 +1339,12 @@ vox/
 └─ tests/
    ├─ conftest.py                fakes and builders shared by the suite
    ├─ unit/                      no GPU, microphone, network or Docker required
-   └─ integration/               marked "integration"; needs a running backend/GPU
+   ├─ integration/               marked "integration"; needs a running backend/GPU
+   └─ eval/                      marked "eval"; grades real model output
+      ├─ cases.yaml              the transcripts, the terms they must recover, known gaps
+      ├─ dataset.py              loading and validating the set
+      ├─ scoring.py              term matching and the suggested correction (pure logic)
+      └─ judge.py                the LLM that grades sense and faithfulness
 ```
 
 ---
@@ -1305,12 +1363,51 @@ uv run pytest
 the tests import. Run `uv sync --all-extras` before `uv run pytest`, and re-run the installer
 afterwards if you want the companion's lean environment back.
 
-`pytest` is configured with `-m 'not integration'`, so the default run needs neither a GPU nor a
-backend. To run the integration tests against a live stack:
+`pytest` is configured with `-m 'not integration and not eval'`, so the default run needs neither a
+GPU nor a backend. To run the integration tests against a live stack:
 
 ```powershell
 uv run pytest -m integration
 ```
+
+### The evaluation
+
+`tests/eval` grades what the model actually writes, which no assertion over fakes can. Each case in
+`tests/eval/cases.yaml` is a transcript with an engineering term mangled the way speech recognition
+really mangles it - "промытоты" for "prompts" - and says which canonical English term the finished
+message has to carry instead, which terms it must not invent, and what the speaker meant. The set
+is replayed through `POST /v1/transform`, so it needs the LLM but not a microphone or Whisper.
+
+Two gradings run over the same answers:
+
+- **Term recovery**, deterministic. The mangled token is gone, every expected term is present, no
+  forbidden term appeared. A failure names the word and prints the sentence as it should have read.
+- **The judge**, an LLM. Whether each term makes sense where it landed and whether the meaning
+  survived - a request still a request, an uncertainty still an uncertainty, nothing added.
+
+Both are gated on a pass rate rather than on every case, because both grade a model. A case that is
+known to fail today carries `known_gap` in the dataset and is reported as XFAIL, so a red run means
+a regression rather than a gap somebody already wrote down; delete the field when a case starts
+passing and pytest will say XPASS until you do.
+
+```powershell
+docker compose up -d
+$env:VOX_EVAL = "1"
+uv run pytest tests\eval -m eval -v
+```
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `VOX_EVAL` | unset | Must be `1`; without it every eval test skips. |
+| `VOX_EVAL_URL` | `http://127.0.0.1:8765` | The backend to grade. |
+| `VOX_EVAL_MIN_PASS_RATE` | `0.8` | Floor for term recovery. |
+| `VOX_EVAL_MIN_JUDGE_PASS_RATE` | `0.7` | Floor for the judge. |
+| `VOX_EVAL_LLM_BASE_URL` / `_MODEL` / `_API_KEY` | the backend's own `LLM_*` | Lets a stronger model do the grading. |
+
+The harness itself is covered offline by `tests/unit/test_eval_scoring.py`,
+`test_eval_dataset.py` and `test_eval_judge.py`, which run in the default suite: a scorer that
+quietly matched fragments, or a parser that crashed on the prose a small model wraps its JSON in,
+would turn the whole evaluation into a rubber stamp.
 
 Ruff is set to line length 100 and `target-version = py314`; mypy runs in strict mode over `src`
 and `tests`.
