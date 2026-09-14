@@ -123,11 +123,6 @@ cases:
     expect: [method]
     forbid: [separate service, extract]
     intent: Withdraws the idea of a separate service and asks only to add a method to the current class.
-    known_gap: >-
-      qwen2.5:7b keeps the withdrawn instruction and joins the two with "however", answering
-      "Move this to a separate service. However, for now, leave it in the current class."
-      The prompt forbids this outright and even carries a worked example of it, so the gap is
-      in the model rather than in the wording; a larger LLM_MODEL is what closes it.
 
   - id: nothing-invented
     transcript: я просто посмотрел как отработал линтер и сколько заняла проверка
@@ -136,3 +131,27 @@ cases:
     expect: [linter]
     forbid: [test, fix, refactor, migration]
     intent: Reports having looked at how the linter ran and how long the check took. No task at all.
+
+  # The failure these two guard against is the one the prompt is least able to state its way
+  # out of: a transcript that is itself a question reads to a small model as a question put to
+  # it, and it answers - with prose, a list of possible causes and a code block - instead of
+  # writing the question down. The transcript is data, and these cases say so.
+  - id: question-stays-a-question
+    transcript: я не понял а что в приложении грузятся запросы на бэкенд из роута
+    language: ru
+    garbled: ""
+    expect: [backend]
+    forbid: [axios, useEffect, React, компонент, проверь, например]
+    intent: >-
+      Asks whether the application loads backend requests from the route. It is the speaker's
+      own question to pass on, not a question for the model to answer.
+
+  - id: question-not-turned-into-a-task
+    transcript: слушай а почему у нас кэш инвалидируется при каждом деплое
+    language: en
+    garbled: ""
+    expect: [cache, deploy]
+    forbid: [check, Redis, TTL, configure, because]
+    intent: >-
+      Asks why the cache is invalidated on every deploy. It stays a question - neither an
+      instruction to investigate nor an answer explaining the cause.

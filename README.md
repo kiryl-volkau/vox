@@ -628,7 +628,9 @@ Placeholders are literal text replacement (`str.replace`, never `str.format`), s
 the prompt text are safe. `{project}` belongs in `## SYSTEM`: it is replaced with the caller's
 `.vox.md` wrapped in a delimited context block, or with nothing at all when there is none, so no
 empty heading is left behind - see [Project context](#project-context---voxmd). `{transcript}` and
-`{glossary}` belong in `## USER`, transcript last, for the reason given in that same section. A
+`{glossary}` belong in `## USER`, with the transcript at the end - wrapped in a `<transcript>`
+tag and followed by nothing but a fixed line of instruction - for the reason given in that same
+section. A
 missing `## USER` section falls back to the transcript alone as the user message; a missing
 `## SYSTEM` section is a startup error - the server has nothing to serve without one. Both prompt
 files are parsed and rendered the same way.
@@ -671,9 +673,11 @@ Two measurements on this machine, with `qwen2.5:7b-instruct` on Ollama, decide t
   system prompt is, per request, practically free.
 * Generated output costs about **8 ms per token**. That is the real bill.
 
-Which is also why the transcript is always **last** in the user message: put project context after
+Which is also why the transcript sits at the **end** of the user message: put project context after
 it and every request changes the prefix, the cache misses, and you pay a full prefill instead of
-25 ms.
+25 ms. The only thing that follows the transcript is a fixed line telling the model to rewrite it
+rather than answer it - constant text after a variable transcript costs a few tokens of prefill,
+not the prefix.
 
 So the price of `.vox.md` is not reading it - it is what it does to the model. More context makes
 the model chattier, and a chattier model is both slower and less precise: a longer answer has more
@@ -1080,7 +1084,7 @@ Trimmed, with the long text cut - a real file carries all of it:
 | Did Whisper mishear me? | `stt.transcript` - the exact text that went on to the model, before the prompt touched it. `stt.language` with `language_probability`, and `audio.decoded_seconds` against `client.audio_seconds`, say whether it heard the right language and the whole recording. |
 | Did my `.vox.md` get picked up? | `project.name` and `project.used_bytes`. A `null` name means the request carried no project context at all - the client decided that, and its own log says why. `truncated: true` means the file was over `MAX_PROJECT_BYTES` (8000) and the tail was dropped. `project.text` is the context the model actually saw, not the file on disk. |
 | Did the cleanup eat my text? | `llm.cleanup_changed`. When it is `true`, read `llm.raw_output` against `llm.cleaned_output`: the cleanup strips code fences, quoting and model preamble, and this is where you see it taking a bite it should not have. |
-| Why did the model answer *that*? | `prompt.system` and `prompt.user`, verbatim and complete - the prompt's instructions plus the project context in the system prompt, the glossary and your transcript in the user message, transcript last. `llm.model` and `llm.temperature` say who answered and how loosely. |
+| Why did the model answer *that*? | `prompt.system` and `prompt.user`, verbatim and complete - the prompt's instructions plus the project context in the system prompt, the glossary and your transcript in the user message, the transcript last inside its `<transcript>` tag. `llm.model` and `llm.temperature` say who answered and how loosely. |
 | Which prompt ran, task or dictation? | `prompt.kind`. `endpoint` cannot tell you: it names the pipeline stage, not the HTTP path, so both `/v1/process` and `/v1/dictate` write `endpoint: "process"`. |
 | Why was it slow? | `timings_ms` - `transcription` against `llm` says which half to blame. A slow first half with `stt.device: "cpu"` is the CUDA fallback; a slow `llm` half is usually a model too big for the GPU (see the VRAM note above). `stt.duration_ms` and `llm.duration_ms` are the stages themselves, the `timings_ms` pair the wall clock around them. |
 | What was actually delivered? | `output.text` - what the plugin typed or the companion pasted, identical to `llm.cleaned_output` unless `output.fell_back_to_transcript` is `true`, in which case it is the raw transcript instead. |
