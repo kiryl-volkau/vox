@@ -3,9 +3,6 @@
 .env.*
 !.env.example
 
-# User-specific client config (config/client.example.yaml is committed)
-config/client.yaml
-
 # Python
 __pycache__/
 *.py[cod]

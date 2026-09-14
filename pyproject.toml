@@ -1,7 +1,7 @@
 [project]
 name = "vox"
 version = "0.1.0"
-description = "Windows push-to-talk voice interface for Claude Code: GPU Whisper STT plus a local OpenAI-compatible LLM in Docker, native Windows hotkey/mic/paste companion."
+description = "Voice input for Claude Code: GPU Whisper STT plus a local OpenAI-compatible LLM in Docker, driven from an IntelliJ IDEA plugin."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -21,16 +21,6 @@ server = [
     "ctranslate2==4.8.2",
     "numpy>=2.5",
 ]
-client = [
-    "httpx>=0.28",
-    "pyyaml>=6.0.3",
-    "numpy>=2.5",
-    "sounddevice>=0.5.6",
-    "pynput>=1.8.2",
-    'pywin32>=312; sys_platform == "win32"',
-    "pystray>=0.19.5",
-    "pillow>=12",
-]
 
 [dependency-groups]
 dev = [
@@ -41,19 +31,17 @@ dev = [
     "mypy>=2.3",
     "types-PyYAML>=6.0",
     "httpx>=0.28",
-    'pyinstaller>=6.22; sys_platform == "win32"',
 ]
 
 [project.scripts]
 vox-server = "vox_server.main:main"
-vox-client = "vox_client.main:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/vox_server", "src/vox_client"]
+packages = ["src/vox_server"]
 
 [tool.ruff]
 line-length = 100

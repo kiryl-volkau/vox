@@ -15,7 +15,7 @@ services:
     environment:
       VOICE_CODE_HOST: "0.0.0.0"
       VOICE_CODE_PORT: "8765"
-    # Loopback only: the Windows companion is the sole client, never expose this on the LAN.
+    # Loopback only: the IDE plugin on this machine is the only client, never expose it on the LAN.
     ports:
       - "127.0.0.1:8765:8765"
     # Lets the container reach an LLM served on the Windows host (the default LLM_BASE_URL).

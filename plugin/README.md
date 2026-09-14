@@ -1,8 +1,7 @@
 # Vox for IntelliJ IDEA
 
 The primary Vox client: a trigger inside the IDE that records the microphone, sends the audio to the
-local Vox backend, and types the rewritten text into the terminal tab you are looking at. The
-Windows companion (`vox-client`) stays for dictating outside the IDE.
+local Vox backend, and types the rewritten text into the terminal tab you are looking at.
 
 Built and tested against IntelliJ IDEA Ultimate 2026.2.2 (build IU-262.10315.125).
 
@@ -175,9 +174,7 @@ Mono 16-bit signed little-endian PCM, at the first rate the mixer accepts out of
 disk.
 
 The device is stored by name rather than by index, because an index means nothing across restarts
-and nothing at all across sound stacks - the Windows companion configures the same microphone
-through PortAudio in `config/client.yaml`, whose indices do not match Java Sound's. A name works in
-both, so the same string in either configuration picks the same microphone. An exact name wins;
+and nothing at all across sound stacks. An exact name wins;
 failing that the first input device whose name contains the configured text is used, and a device
 that is gone falls back to the system default rather than failing the recording.
 

@@ -30,13 +30,6 @@ class ProcessResponse(BaseModel):
     analysis: Analysis | None = None
 
 
-class TranscribeResponse(BaseModel):
-    request_id: str
-    transcript: str
-    language: str
-    timings_ms: TimingsMs
-
-
 class TransformRequest(BaseModel):
     text: str
     dictation: bool = False

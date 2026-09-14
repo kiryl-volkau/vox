@@ -133,21 +133,6 @@ async def test_the_output_language_never_reaches_the_transcriber(
     assert transcriber.calls == [(AUDIO, None)]
 
 
-async def test_a_language_override_reaches_the_transcriber_when_transcribing_only(
-    processor_factory: ProcessorFactory,
-    transcriber_factory: Callable[..., Any],
-    llm_factory: Callable[..., Any],
-) -> None:
-    """/v1/transcribe returns speech as recognised, so there its language is the spoken one."""
-    transcriber = transcriber_factory()
-    processor = processor_factory(transcriber, llm_factory())
-
-    response = await processor.transcribe_only(AUDIO, request_id="req-10", language="en")
-
-    assert transcriber.calls == [(AUDIO, "en")]
-    assert response.language == "en"
-
-
 async def test_the_output_language_picks_the_prompt_language_block(
     processor_factory: ProcessorFactory,
     transcriber_factory: Callable[..., Any],
@@ -253,34 +238,6 @@ async def test_timings_are_populated_and_consistent(
     assert timings.llm >= 25
     assert timings.total >= timings.transcription
     assert timings.total >= timings.llm
-
-
-async def test_transcribe_only_skips_the_llm(
-    processor_factory: ProcessorFactory,
-    transcriber_factory: Callable[..., Any],
-    llm_factory: Callable[..., Any],
-) -> None:
-    transcriber = transcriber_factory("  сырая расшифровка  ")
-    llm = llm_factory()
-    processor = processor_factory(transcriber, llm)
-
-    response = await processor.transcribe_only(AUDIO, request_id="req-12", language="ru")
-
-    assert response.transcript == "сырая расшифровка"
-    assert response.language == "ru"
-    assert response.timings_ms.llm == 0
-    assert llm.calls == []
-
-
-async def test_transcribe_only_rejects_an_empty_transcript(
-    processor_factory: ProcessorFactory,
-    transcriber_factory: Callable[..., Any],
-    llm_factory: Callable[..., Any],
-) -> None:
-    processor = processor_factory(transcriber_factory(""), llm_factory())
-
-    with pytest.raises(EmptyTranscriptError):
-        await processor.transcribe_only(AUDIO, request_id="req-13")
 
 
 async def test_transform_only_skips_speech_recognition(

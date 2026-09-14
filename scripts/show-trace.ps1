@@ -23,7 +23,7 @@
 
 .PARAMETER RequestId
     Show the trace of this request id instead of the most recent one. A unique prefix is
-    enough; the id is printed by -List and by the companion's own log.
+    enough; the id is printed by -List and by the plugin's notification.
 
 .PARAMETER Full
     Print transcripts, prompts and output in full. Without it long text is cut short.
@@ -212,7 +212,7 @@ function Show-TracingIsOff {
     Write-Info "       VOX_TRACE_DIR=/traces"
     Write-Info "       VOX_TRACE_KEEP=200"
     Write-Info "2. restart the backend:"
-    Write-Info "       powershell -ExecutionPolicy Bypass -File scripts\start.ps1"
+    Write-Info "       docker compose up -d"
     Write-Info "3. dictate once, then run this script again."
     Write-Host ""
     Write-Host "compose.yaml already mounts .\traces into the container at /traces, so the files"
@@ -285,11 +285,11 @@ function Show-Project {
     $name = Get-Prop $project "name"
     if ($null -eq $project -or $null -eq $name) {
         Write-Info "no project context was sent with this request"
-        Write-Info "the companion logs why at INFO (project_status=) in %LOCALAPPDATA%\vox\client.log"
+        Write-Info "the plugin logs why in Help | Show Log in Explorer"
         return
     }
     Write-Field "name" $name
-    Write-Field "file" ("{0}\.vox.md - the companion logs the full path at INFO" -f $name)
+    Write-Field "file" ("{0}\.vox.md" -f $name)
     Write-Field "received" ("{0} bytes" -f (Format-Value (Get-Prop $project "received_bytes") "?"))
     Write-Field "used" ("{0} bytes" -f (Format-Value (Get-Prop $project "used_bytes") "?"))
     Write-Field "truncated" (Get-Prop $project "truncated")

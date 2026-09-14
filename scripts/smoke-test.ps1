@@ -278,7 +278,7 @@ if ($healthResponse.StatusCode -eq 200) {
         $detail = "HTTP $($healthResponse.StatusCode)"
     }
     Write-Result -Name "a) GET /health reachable" -Status "FAIL" -Detail $detail
-    Write-Note "Start the backend with: powershell -ExecutionPolicy Bypass -File scripts\start.ps1 -NoClient"
+    Write-Note "Start the backend with: docker compose up -d"
     if ($healthResponse.Error) {
         Write-Note $healthResponse.Error
     }

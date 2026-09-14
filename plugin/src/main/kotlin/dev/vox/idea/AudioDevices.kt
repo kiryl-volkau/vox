@@ -11,9 +11,8 @@ import javax.sound.sampled.TargetDataLine
  * The microphones this IDE can actually record from.
  *
  * A device is identified by its name rather than by an index, because an index means nothing
- * across restarts or across sound stacks - the Windows companion configures the same microphone
- * through PortAudio in `config/client.yaml`, whose indices do not match Java Sound's at all. A
- * name survives both, so the same string in either configuration picks the same microphone.
+ * across restarts or across sound stacks. A name survives both, so the same setting keeps
+ * picking the same microphone.
  */
 internal object AudioDevices {
 
@@ -51,7 +50,7 @@ internal object AudioDevices {
      *
      * A blank name means the default. An exact name match wins; otherwise the first input device
      * whose name contains the configured text, case-insensitively, is used - the same rule the
-     * Windows companion applies - so a shortened or partially remembered name still resolves.
+     * so a shortened or partially remembered name still resolves.
      * Returns null when nothing matches, which records from the default device rather than
      * failing: a microphone that was unplugged must not stop dictation.
      */

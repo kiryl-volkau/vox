@@ -59,8 +59,8 @@ class VoxConfigurable : BoundConfigurable("Vox") {
                 cell(deviceCombo())
                     .bindItem({ state.inputDeviceName }, { state.inputDeviceName = it.orEmpty() })
                     .comment(
-                        "Devices are matched by name, so the same name works here and in " +
-                            "config/client.yaml. A device that is gone falls back to the system default."
+                        "Devices are matched by name, so a device that is gone falls back " +
+                            "to the system default."
                     )
             }
             row("Max recording (s):") {

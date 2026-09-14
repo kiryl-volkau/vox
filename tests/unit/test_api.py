@@ -17,7 +17,6 @@ from vox_server.llm import LlmResponseError, LlmTimeoutError, LlmUnavailableErro
 from vox_server.models import (
     ProcessResponse,
     TimingsMs,
-    TranscribeResponse,
     TransformResponse,
 )
 from vox_server.processor import EmptyTranscriptError, Processor
@@ -48,7 +47,7 @@ class FakeProcessor:
     call, so a route that forwards nothing is distinguishable from one that forwards "".
     ``provenance`` records the (project_name, client_id, client_version, audio_seconds) the
     route reported about its caller. ``dictation_calls`` records the ``dictation`` flag each
-    call carried, so /v1/process and /v1/dictate are distinguishable here too. ``contexts``
+    call carried. ``contexts``
     and ``languages`` record the conversation context and the output language per call.
     """
 
@@ -90,20 +89,6 @@ class FakeProcessor:
             output=self.output,
             language="ru",
             timings_ms=TimingsMs(transcription=120, llm=340, total=470),
-        )
-
-    async def transcribe_only(
-        self, audio: bytes, *, request_id: str, language: str | None = None
-    ) -> TranscribeResponse:
-        del language
-        self.calls.append((audio, request_id))
-        if self.raises is not None:
-            raise self.raises
-        return TranscribeResponse(
-            request_id=request_id,
-            transcript="посмотри мембершип",
-            language="ru",
-            timings_ms=TimingsMs(transcription=120, llm=0, total=120),
         )
 
     async def transform_only(
@@ -227,7 +212,7 @@ def test_health_never_reports_ready_while_startup_is_still_running(
 ) -> None:
     """STT and the LLM can both be up while the processor has not been published yet.
 
-    Reporting "ready" in that window makes start.ps1 launch the companion straight into a
+    Reporting "ready" in that window sends the first request straight into a
     503 "warming" on the first voice request.
     """
     state = state_factory(
@@ -281,30 +266,6 @@ def test_process_returns_the_documented_payload(
     assert len(body["request_id"]) == 12
 
 
-def test_dictate_returns_the_documented_payload(
-    ready_state: ServerState, app_factory: AppFactory
-) -> None:
-    client = TestClient(app_factory(ready_state))
-
-    response = client.post(
-        "/v1/dictate",
-        files=_upload(),
-        data={"client_id": "vox-windows", "audio_seconds": "1.25"},
-    )
-    body = response.json()
-
-    assert response.status_code == 200
-    assert set(body) == {
-        "request_id",
-        "transcript",
-        "output",
-        "language",
-        "timings_ms",
-        "analysis",
-    }
-    assert body["request_id"] == response.headers["X-Request-ID"]
-
-
 def test_process_forwards_the_uploaded_bytes(
     ready_state: ServerState, app_factory: AppFactory
 ) -> None:
@@ -326,17 +287,6 @@ def test_process_tells_the_processor_this_is_not_dictation(
     client.post("/v1/process", files=_upload())
 
     assert processor.dictation_calls == [False]
-
-
-def test_dictate_tells_the_processor_this_is_dictation(
-    ready_state: ServerState, app_factory: AppFactory
-) -> None:
-    processor = FakeProcessor()
-    client = TestClient(app_factory(_with_processor(ready_state, processor)))
-
-    client.post("/v1/dictate", files=_upload())
-
-    assert processor.dictation_calls == [True]
 
 
 def test_an_empty_upload_is_rejected(ready_state: ServerState, app_factory: AppFactory) -> None:
@@ -441,33 +391,6 @@ def test_an_empty_model_reply_falls_back_to_the_transcript_on_process(
     assert body["output"] == body["transcript"] == "посмотри мембершип"
 
 
-def test_an_empty_model_reply_falls_back_to_the_transcript_on_dictate(
-    state_factory: StateFactory,
-    settings_factory: Callable[..., Settings],
-    transcriber_factory: Callable[..., Any],
-    llm_factory: Callable[..., Any],
-    processor_factory: Callable[..., Processor],
-    app_factory: AppFactory,
-) -> None:
-    settings = settings_factory()
-    transcriber = transcriber_factory("посмотри мембершип", ready=True)
-    llm = llm_factory("   ")
-    state = state_factory(
-        settings=settings,
-        transcriber=transcriber,
-        llm=llm,
-        processor=processor_factory(transcriber, llm, settings=settings),
-        llm_ready=True,
-    )
-    client = TestClient(app_factory(state))
-
-    response = client.post("/v1/dictate", files=_upload())
-    body = response.json()
-
-    assert response.status_code == 200
-    assert body["output"] == body["transcript"] == "посмотри мембершип"
-
-
 def test_an_unexpected_error_becomes_a_bare_internal_error(
     ready_state: ServerState, app_factory: AppFactory
 ) -> None:
@@ -527,19 +450,6 @@ def test_requests_before_any_state_exists_are_refused(app_factory: AppFactory) -
 
     assert response.status_code == 503
     assert response.json()["error"] == "warming"
-
-
-def test_transcribe_returns_the_raw_transcript(
-    ready_state: ServerState, app_factory: AppFactory
-) -> None:
-    client = TestClient(app_factory(ready_state))
-
-    response = client.post("/v1/transcribe", files=_upload(), data={"language": "ru"})
-    body = response.json()
-
-    assert response.status_code == 200
-    assert set(body) == {"request_id", "transcript", "language", "timings_ms"}
-    assert body["transcript"] == "посмотри мембершип"
 
 
 def test_transform_runs_without_speech_recognition(
@@ -625,7 +535,7 @@ def test_health_probes_the_llm_with_a_short_budget(
     """A firewalled endpoint that black-holes packets must not stall /health.
 
     Without a per-probe budget the probe inherits LLM_TIMEOUT_SECONDS (30s by default), which
-    is longer than the Docker healthcheck timeout and than start.ps1's poll interval.
+    is longer than the Docker healthcheck timeout.
     """
     client = TestClient(app_factory(ready_state))
 
@@ -679,23 +589,6 @@ def test_process_forwards_the_conversation_context_and_the_language(
     assert response.status_code == 200
     assert processor.contexts == [CONVERSATION]
     assert processor.languages == ["ru"]
-
-
-def test_dictate_forwards_the_conversation_context_and_the_language(
-    ready_state: ServerState, app_factory: AppFactory
-) -> None:
-    processor = FakeProcessor()
-    client = TestClient(app_factory(_with_processor(ready_state, processor)))
-
-    response = client.post(
-        "/v1/dictate",
-        files=_upload(),
-        data={"context": CONVERSATION, "language": "en"},
-    )
-
-    assert response.status_code == 200
-    assert processor.contexts == [CONVERSATION]
-    assert processor.languages == ["en"]
 
 
 def test_a_request_without_a_context_or_language_forwards_nothing(
@@ -894,34 +787,6 @@ def test_process_runs_the_task_prompt_at_the_task_temperature(
     system, _user, temperature = llm.calls[0]
     assert system == "Ты редактор."
     assert temperature == pytest.approx(0.42)
-
-
-def test_dictate_runs_the_dictation_prompt_at_the_dictation_temperature(
-    state_factory: StateFactory,
-    settings_factory: Callable[..., Settings],
-    transcriber_factory: Callable[..., Any],
-    llm_factory: Callable[..., Any],
-    processor_factory: Callable[..., Processor],
-    app_factory: AppFactory,
-) -> None:
-    settings = settings_factory(llm_temperature=0.42, llm_dictation_temperature=0.0)
-    transcriber = transcriber_factory(ready=True)
-    llm = llm_factory("Расшифровка, готово.")
-    state = state_factory(
-        settings=settings,
-        transcriber=transcriber,
-        llm=llm,
-        processor=processor_factory(transcriber, llm, settings=settings),
-        llm_ready=True,
-    )
-    client = TestClient(app_factory(state))
-
-    response = client.post("/v1/dictate", files=_upload())
-
-    assert response.status_code == 200
-    system, _user, temperature = llm.calls[0]
-    assert system == "Ты диктофон."
-    assert temperature == pytest.approx(0.0)
 
 
 def test_config_reports_the_live_llm_without_the_key(

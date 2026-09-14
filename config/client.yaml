@@ -54,26 +54,7 @@ overlay:
   position: "bottom-center"
   hide_delay_ms: 1200
 
-# Per-project context. A project may keep a .vox.md in its root holding its vocabulary,
-# constraints and worked examples; the companion sends that text with the request and the backend
-# puts it in the system prompt, where the model's prompt cache makes it practically free.
-# roots: directories that may each contain one, e.g. "C:/Users/you/IdeaProjects/jigward".
-# The companion picks the root whose folder name appears in the title of the window you were in
-# when you pressed the hotkey (how IntelliJ titles its windows); the longest matching name wins.
-# With no roots, or detect_from_window: false, no project context is ever sent.
-# max_bytes caps what is sent: a longer file is cut on a line boundary. Keep the file short - the
-# model gets chattier with more context, and output length is what actually costs time.
-project:
-  roots: []
-  file_name: ".vox.md"
-  detect_from_window: true
-  max_bytes: 8000
-
 # level: DEBUG, INFO, WARNING, ERROR.
-# At INFO the companion logs one provenance line per recording: the project it resolved,
-# the .vox.md it read, how many bytes of it were sent, whether they were truncated,
-# why nothing was sent when nothing was (project_status), and the target window handle. The
-# window TITLE is logged only at DEBUG, because it usually names the file you had open.
 # log_text: true also writes transcripts and generated prompts to the log at DEBUG. Off by default.
 logging:
   level: "INFO"

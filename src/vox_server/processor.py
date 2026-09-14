@@ -19,7 +19,6 @@ from .llm import LlmError, LlmResponseError, OpenAICompatibleClient, clean_llm_o
 from .models import (
     ProcessResponse,
     TimingsMs,
-    TranscribeResponse,
     TranscriptionResult,
     TransformResponse,
 )
@@ -208,50 +207,6 @@ class Processor:
                 language=result.language,
                 timings_ms=timings,
                 analysis=run.analysis,
-            )
-        except BaseException as exc:
-            trace.record_error(exc)
-            trace.total_ms = _elapsed_ms(started)
-            raise
-        finally:
-            self._finish(trace, trace.stt_transcript)
-
-    async def transcribe_only(
-        self,
-        audio: bytes,
-        *,
-        request_id: str,
-        language: str | None = None,
-        project: str | None = None,  # noqa: ARG002
-    ) -> TranscribeResponse:
-        """Transcribe ``audio`` without touching the LLM. Raises EmptyTranscriptError.
-
-        Here ``language`` is the *spoken* language handed to Whisper, not an output language,
-        because this endpoint returns speech as recognised and never reaches a prompt.
-        ``project`` is accepted so every entry point takes the same keywords, and ignored.
-        """
-        trace = RequestTrace(
-            request_id=request_id,
-            endpoint="transcribe",
-            audio_bytes=len(audio),
-        )
-        started = time.perf_counter()
-        try:
-            async with self._semaphore:
-                stt_started = time.perf_counter()
-                result = await asyncio.to_thread(self._transcriber.transcribe, audio, language)
-                transcription_ms = _elapsed_ms(stt_started)
-            transcript = result.text.strip()
-            self._record_stt(trace, result, transcript, transcription_ms)
-            if not transcript:
-                raise EmptyTranscriptError("speech recognition produced an empty transcript")
-            timings = TimingsMs(transcription=transcription_ms, llm=0, total=_elapsed_ms(started))
-            trace.total_ms = timings.total
-            return TranscribeResponse(
-                request_id=request_id,
-                transcript=transcript,
-                language=result.language,
-                timings_ms=timings,
             )
         except BaseException as exc:
             trace.record_error(exc)

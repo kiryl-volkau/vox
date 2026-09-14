@@ -1,8 +1,7 @@
 name: CI
 
-# Windows on purpose. The companion is a Windows program - it imports pynput, sounddevice and
-# ctypes.windll at module load - so its unit tests cannot even be collected on Linux, and a CI
-# that quietly skips half the suite is worse than no CI.
+# The backend is the only Python left in the repository and it runs on Linux, which is what
+# its image is built on.
 #
 # The integration and eval suites are deliberately absent: both need a running backend with
 # CUDA and a live language model behind it, which no hosted runner has. A suite that cannot
@@ -19,7 +18,7 @@ concurrency:
 jobs:
   checks:
     name: lint, types and unit tests
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     timeout-minutes: 20
 
     steps:
@@ -37,7 +36,7 @@ jobs:
         run: uv python install 3.14
 
       - name: Install dependencies
-        run: uv sync --locked --extra server --extra client
+        run: uv sync --locked --extra server
 
       - name: Lint
         run: uv run ruff check .

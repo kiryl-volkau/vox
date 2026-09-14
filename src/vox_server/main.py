@@ -188,7 +188,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Loading Whisper takes tens of seconds (minutes on a cold model cache). Warming in the
     # background lets /health answer "warming" straight away instead of refusing connections,
-    # which is what the companion and start.ps1 report progress from.
+    # which is what the plugin reports progress from.
     trace_writer = build_trace_writer(settings)
     warmup_task = asyncio.create_task(
         _warm_up(

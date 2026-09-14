@@ -520,31 +520,6 @@ async def test_the_traced_prompt_keeps_the_project_in_the_system_message(
     assert prompt_doc["user"].rstrip().endswith(TRANSCRIPT)
 
 
-async def test_a_transcribe_trace_has_no_project_prompt_or_llm_section(
-    processor_factory: ProcessorFactory,
-    transcriber_factory: Fake,
-    llm_factory: Fake,
-    trace_dir: Path,
-) -> None:
-    processor = processor_factory(
-        transcriber_factory(TRANSCRIPT),
-        llm_factory(REPLY),
-        trace_writer=TraceWriter(trace_dir, 10),
-    )
-
-    await processor.transcribe_only(AUDIO, request_id="req-stt")
-    doc = only_trace(trace_dir)
-
-    assert set(doc) == TRACE_KEYS
-    assert doc["endpoint"] == "transcribe"
-    assert doc["stt"]["transcript"] == TRANSCRIPT
-    assert doc["audio"]["bytes"] == len(AUDIO)
-    assert doc["project"] is None
-    assert doc["prompt"] is None
-    assert doc["llm"] is None
-    assert doc["output"] is None
-
-
 async def test_a_transform_trace_has_no_audio_or_stt_section(
     prompt_factory: PromptFactory,
     processor_factory: ProcessorFactory,

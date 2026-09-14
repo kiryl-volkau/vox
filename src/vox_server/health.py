@@ -72,9 +72,9 @@ async def build_health(state: ServerState) -> HealthResponse:
     "ready" when STT is loaded and the LLM answers, and "degraded" otherwise. The reported
     LLM base URL has any credentials stripped; the API key is never included.
     """
-    # A short budget on purpose: /health is polled by the Docker healthcheck and by
-    # start.ps1, and a firewalled endpoint that black-holes packets would otherwise stall
-    # every health response for the full LLM timeout.
+    # A short budget on purpose: /health is polled by the Docker healthcheck, and a
+    # firewalled endpoint that black-holes packets would otherwise stall every health
+    # response for the full LLM timeout.
     await refresh_llm(state, HEALTH_PROBE_TIMEOUT_S)
     settings = state.settings
     transcriber = state.transcriber
@@ -83,7 +83,7 @@ async def build_health(state: ServerState) -> HealthResponse:
     status: Literal["ready", "warming", "degraded"]
     if state.warming:
         # Startup publishes the processor last, so "ready" must wait for the whole sequence:
-        # reporting it earlier makes start.ps1 launch the companion into 503 "warming".
+        # reporting it earlier sends the first request into a 503 "warming".
         status = "warming"
     elif stt_ready and state.llm_ready:
         status = "ready"

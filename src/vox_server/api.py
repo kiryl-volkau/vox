@@ -30,7 +30,6 @@ from .models import (
     LlmHealth,
     ProcessResponse,
     SttHealth,
-    TranscribeResponse,
     TransformRequest,
     TransformResponse,
 )
@@ -267,47 +266,6 @@ async def process_audio(
         client_version=client_version,
         audio_seconds=audio_seconds,
     )
-
-
-@router.post("/v1/dictate")
-async def dictate_audio(
-    request: Request,
-    audio: Annotated[UploadFile, File()],
-    project: Annotated[str | None, Form()] = None,
-    project_name: Annotated[str | None, Form()] = None,
-    context: Annotated[str | None, Form()] = None,
-    language: Annotated[str | None, Form()] = None,
-    client_id: Annotated[str | None, Form()] = None,
-    client_version: Annotated[str | None, Form()] = None,
-    audio_seconds: Annotated[float | None, Form()] = None,
-) -> ProcessResponse:
-    """Transcribe the uploaded WAV and return it punctuated, with nothing reformulated."""
-    return await _transcribe_and_prompt(
-        request,
-        audio,
-        dictation=True,
-        project=project,
-        project_name=project_name,
-        context=context,
-        language=language,
-        client_id=client_id,
-        client_version=client_version,
-        audio_seconds=audio_seconds,
-    )
-
-
-@router.post("/v1/transcribe")
-async def transcribe_audio(
-    request: Request,
-    audio: Annotated[UploadFile, File()],
-    language: Annotated[str | None, Form()] = None,
-) -> TranscribeResponse:
-    """Return the raw transcript of the uploaded WAV, with no LLM post-processing."""
-    state = _server_state(request)
-    processor = _ready_processor(state, needs_stt=True)
-    request_id = _request_id(request)
-    data = await _read_upload(audio, state.settings, None)
-    return await processor.transcribe_only(data, request_id=request_id, language=language)
 
 
 @router.post("/v1/transform")

@@ -67,9 +67,6 @@ you say:   посмотри этот сервис тут мембершип по
 you get:   Посмотри этот сервис; тут membership почему-то второй раз достается.
 ```
 
-For dictating outside the IDE there is a Windows companion with two global hotkeys -
-`.\scripts\install-client.ps1`.
-
 ## Things worth knowing
 
 - **The answer comes back in the language you spoke.** Say something in Russian, get Russian; in

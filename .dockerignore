@@ -1,6 +1,6 @@
 # Everything the GPU backend image does not need.
-# Note: README.md and src/vox_client/ are NOT excluded - the wheel build
-# declares both (project.readme, tool.hatch packages) and fails without them.
+# Note: README.md is NOT excluded - the wheel build declares it (project.readme)
+# and fails without it.
 
 .git/
 .gitignore
@@ -41,8 +41,7 @@ logs/
 .env
 .env.*
 
-# Windows-companion-only assets.
-config/client.yaml
+# Host-only tooling.
 scripts/*.ps1
 scripts/*.bat
 

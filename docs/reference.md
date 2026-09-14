@@ -8,7 +8,7 @@ terminal. **Enter is never pressed for you.** You read the text, edit it if you 
 yourself.
 
 The project is called **vox**, and the checkout directory can be called anything: the packages
-`vox_server` and `vox_client`, the console scripts `vox-server` and `vox-client` and the containers
+`vox_server`, the console script `vox-server` and the containers
 `vox-backend` and `vox-ollama` all carry the name themselves, and `compose.yaml` pins the compose
 project with `name: vox` so renaming the folder cannot orphan the volumes.
 
@@ -18,8 +18,6 @@ Three pieces:
   OpenAI-compatible LLM that turns spoken speech into a usable prompt;
 * an **IntelliJ IDEA plugin** - the primary client. It records, sends, and types the result straight
   into the terminal tab you are looking at, and it sends the open project's `.vox.md` as context;
-* a **native Windows companion** that owns two global hotkeys, the microphone, an on-screen overlay,
-  the clipboard and the paste - for dictating into everything that is not the IDE.
 
 Nothing leaves the machine: no telemetry, no cloud API, no database, and audio is never written to
 disk. **The backend never reads your repository** - the client sends one file, the one you wrote
@@ -38,23 +36,23 @@ for it.
   |   Terminal                       |
   |     Claude Code   <--------+     |
   +----------------------------|-----+
-                               |  typed in by the plugin, or pasted by
-                               |  the companion - Enter is NEVER sent
+                               |  typed in by the plugin
+                               |  Enter is NEVER sent
   +----------------------------|-----+           +--------------------------------+
   | vox plugin (in the IDE)    |     |           | vox-backend                    |
   |   Ctrl+Alt+Shift+D, a toggle     |           |                                |
   |   javax.sound, WAV kept in RAM   | multipart |  FastAPI on 0.0.0.0:8765       |
   |   <open project>/.vox.md         |   POST    |    |                           |
-  +---------------+------------------+-----------+->  +- decode WAV -> 16 kHz mono|
-                  |                   /v1/process|    |                           |
-  +---------------+------------------+           |    +- faster-whisper "turbo"   |
-  | vox companion (native)           |           |    |  CTranslate2 + CUDA ------+--> RTX 5070 Ti
-  |   Ctrl+Alt+Space/D, held (pynput)|           |    |                           |     16 GB
-  |   sounddevice, WAV kept in RAM   |           |    +- prompts                  |
-  |   <focused project>/.vox.md      |           |    |  prompt.md, dictation.md  |
-  |   clipboard + SendInput paste    |           |    |  + config/glossary.yaml   |
-  |   overlay (never takes focus)    |           |    |  + .vox.md in the SYSTEM  |
-  +----------------------------------+           |    |    message                |
+  +----------------------------------+-----------+->  +- decode WAV -> 16 kHz mono|
+                                      /v1/process|    |                           |
+                                                 |    +- faster-whisper "turbo"   |
+                                                 |    |  CTranslate2 + CUDA ------+--> RTX 5070 Ti
+                                                 |    |                           |     16 GB
+                                                 |    +- prompts                  |
+                                                 |    |  prompt.md, dictation.md  |
+                                                 |    |  + config/glossary.yaml   |
+                                                 |    |  + .vox.md in the SYSTEM  |
+                                                 |    |    message                |
                                                  |    |                           |
                                                  |    +- LLM chat completion -----+--+
                                                  +--------------------------------+  |
@@ -72,46 +70,6 @@ for it.
        LLM_BASE_URL=http://ollama:11434/v1  -----------> container "vox-ollama"
 ```
 
-### Why the companion is not in Docker
-
-Everything the companion does is a property of *your Windows desktop session*, and a Linux
-container has none of it:
-
-* **Global hotkeys** are a low-level Windows keyboard hook. A container has no Windows message
-  queue and cannot see keystrokes on their way to IntelliJ.
-* **The microphone** is a Windows WASAPI endpoint. Docker Desktop on Windows does not pass host
-  audio devices into WSL2 containers.
-* **Focus** - "which window was in front when I started talking" - is `GetForegroundWindow()`, a
-  per-session Win32 concept.
-* **The clipboard** is per-session too, and pasting means synthesising real keystrokes with
-  `SendInput()` into another process's input queue.
-
-So the split is deliberate: the container gets what wants a GPU and a Linux CUDA stack (Whisper,
-the LLM), the Windows process gets what wants a Windows desktop. They talk over plain HTTP on
-loopback. The IntelliJ plugin lives inside the IDE for the same kind of reason: it is the only
-client that already knows which project is open and which terminal tab you are looking at.
-
-### Which client to use when
-
-Both clients speak the same HTTP contract to the same backend, and both can run at once. The plugin
-only ever calls `/v1/process`; the companion also has `/v1/dictate` behind its second hotkey.
-
-| | IntelliJ plugin | Windows companion |
-|---|---|---|
-| Where the text lands | Typed into the active Terminal tab | Pasted into whatever window has focus |
-| Trigger | A toggle: press to start, press to stop | Push-to-talk: hold `record` or `dictate`, release to send |
-| Prompt | Always the task prompt - no dictation option | Task prompt on `record`, dictation prompt on `dictate` |
-| `.vox.md` | The open project's, automatically | The project whose folder name is in the focused window's title, and only if you listed its root in `client.yaml` |
-| Needs | Nothing beyond the IDE | A Python install or `vox.exe`, plus a tray process |
-
-Use the **plugin** for talking to Claude Code, which is the whole point of the project: it knows the
-project, it knows the terminal, and it needs no configuration. Use the **companion** when the target
-is not an IDE terminal - a browser, a chat window, a commit dialog - or when you want its `dictate`
-hotkey, which returns your own words cleaned up instead of turned into a task (see
-[The prompts](#the-prompts)). The plugin has only one trigger and always runs the task prompt: there
-is no dictation prompt inside the IDE.
-
----
 
 ## Prerequisites
 
@@ -120,14 +78,14 @@ is no dictation prompt inside the IDE.
 | Windows 11 | Developed on 11 Home 26200. |
 | NVIDIA GPU + current driver | Developed on an RTX 5070 Ti (Blackwell, sm_120), 16 GB, driver 616.64. |
 | Docker Desktop, WSL2 backend | Developed with 28.5.2 / Compose v2.40.3, WSL2 kernel 6.6.87.2. |
-| Python 3.14 on the host | For the companion and the tests only. |
+| Python 3.14 on the host | For running the tests only. |
 | `uv` | <https://docs.astral.sh/uv/> - used for the host venv and inside the image build. |
 | A local LLM server | Ollama or LM Studio on Windows, **or** the bundled compose profile. |
 | IntelliJ IDEA 2026.2+ | For the plugin. Built against Ultimate 2026.2.2 (IU-262.10315.125). |
 | A JetBrains Runtime 21+ | Only to *build* the plugin. `C:\Users\<you>\.jdks\jbr-25.0.2`, or the `jbr` folder inside the IDE installation. `java` on PATH is JDK 1.8 here and is far too old. |
 
 The backend image installs its own Python 3.14 with `uv`, so the host Python matters only for the
-companion and the tests. Installing a prebuilt plugin zip needs no JDK at all.
+tests. Installing a prebuilt plugin zip needs no JDK at all.
 
 ### Docker Desktop / WSL2 / NVIDIA
 
@@ -311,29 +269,6 @@ Then in the IDE: **Settings | Plugins | gear icon | Install Plugin from Disk...*
 `plugin\build\distributions\vox-idea-0.1.0.zip`, and restart. Details, including how to rebind the
 shortcut, are in [The IntelliJ plugin](#the-intellij-plugin).
 
-**4. Install the Windows companion (optional)**
-
-Only needed for dictating outside the IDE.
-
-```powershell
-.\scripts\install-client.ps1
-```
-
-which creates the host virtualenv and installs the client dependencies, equivalent to:
-
-```powershell
-uv sync --extra client
-```
-
-**5. Client configuration (optional)**
-
-```powershell
-Copy-Item config\client.example.yaml config\client.yaml
-```
-
-Every value in the example is the default, so you only need this file to change something - a
-different microphone, different hotkeys, a longer timeout, or the project roots that make
-[`.vox.md`](#project-context---voxmd) work. `config/client.yaml` is gitignored.
 
 ---
 
@@ -347,29 +282,11 @@ docker compose up -d
 
 and the IDE is then ready - `Ctrl+Alt+Shift+D`, speak, `Ctrl+Alt+Shift+D`.
 
-To bring the companion up as well:
+To shut it down:
 
 ```powershell
-.\scripts\start.ps1
+docker compose down
 ```
-
-starts the compose stack, waits for `/health` to report `ready`, and launches the companion.
-By hand that is:
-
-```powershell
-docker compose up -d
-uv run vox-client
-```
-
-To shut everything down:
-
-```powershell
-.\scripts\stop.ps1
-```
-
-The companion adds a notification-area icon with **Status**, **Open config folder** and **Quit**.
-It has no window of its own - only the small overlay that appears while you speak. If the tray
-icon cannot be created the app logs it and keeps working.
 
 ---
 
@@ -377,8 +294,8 @@ icon cannot be created the app logs it and keeps working.
 
 The primary client. It records the microphone, posts to the backend, reads `.vox.md` from the open
 project, and types the result into the terminal tab you are looking at. It always calls
-`POST /v1/process` and runs the task prompt - there is no dictation-prompt trigger in the IDE; use
-the companion's `dictate` hotkey for that (see [The prompts](#the-prompts)). Built and tested
+`POST /v1/process` and runs the task prompt; the dictation prompt is reachable from the plugin's
+bench through `POST /v1/transform` (see [The prompts](#the-prompts)). Built and tested
 against IntelliJ IDEA Ultimate 2026.2.2 (build IU-262.10315.125).
 
 ### Building
@@ -462,56 +379,6 @@ is needed and no other file is read - see [Project context](#project-context---v
 Mono 16-bit signed little-endian PCM from the default input device, at the first rate the mixer
 accepts out of 16 kHz, 48 kHz and 44.1 kHz, wrapped in a RIFF/WAVE file that only ever exists in
 memory. Nothing is written to disk.
-
----
-
-## Hotkeys
-
-### In the IDE - the plugin
-
-| Combo | Action | What it does |
-|---|---|---|
-| `Ctrl+Alt+Shift+D` | Vox: Dictate | First press starts recording, second press stops it and sends it. |
-| `Ctrl+Alt+Shift+X` | Vox: Cancel Dictation | Throws the running recording away. |
-
-A toggle, not push-to-talk: an IDE action fires on key press and is never told the key went up, so
-there is no "release to send". Both actions also sit in the **Tools** menu, and the status bar
-widget (`Vox`, `Vox ● REC`, `Vox …`) shows the state and starts a dictation when clicked.
-
-### Everywhere else - the companion
-
-| Combo | Action | What you get |
-|---|---|---|
-| `Ctrl+Alt+Space` | record | Push-to-talk: hold to capture, release to send. Runs the task prompt. |
-| `Ctrl+Alt+D` | dictate | Push-to-talk: hold to capture, release to send. Runs the dictation prompt - punctuation and filler removal, nothing reformulated. |
-| `Esc` | cancel | While recording: drops the audio, sends nothing. |
-
-Hold the combo while you speak; release it when you are done. Releasing the **trigger** key
-(`Space` for `record`, `D` for `dictate`) is what ends the recording - releasing `Ctrl` or `Alt`
-first does not, in any order. Keyboard auto-repeat is ignored, so recording starts exactly once per
-press.
-
-The modifier set must match exactly: `Ctrl+Alt+Shift+Space` is not `Ctrl+Alt+Space` and does
-nothing. Pressing either trigger again while a recording or a request is in flight is ignored -
-there is never more than one recording at a time, whichever combo started it. `record` and `dictate`
-must be different combos - a config where they match is rejected at startup with
-`hotkeys.dictate: must differ from hotkeys.record, or it never fires`.
-
-**Enter is never pressed automatically**, by either client. Recognition is good, not perfect, and a
-prompt you have not read is a prompt you did not write, so the text lands in the terminal and waits.
-The plugin has no switch for this at all: it never sends a newline. The companion's
-`paste.auto_submit` defaults to `false`; setting it to `true` in `config/client.yaml` makes it press
-Enter right after the paste, if you insist.
-
-**Why not `Ctrl+Space`?** IntelliJ binds it to basic code completion and consumes it before
-anything else sees it, so a `Ctrl+Space` hotkey would either never fire or fight the IDE.
-`Ctrl+Alt+<key>` combos stay clear of the IntelliJ terminal. All of it is configurable - see
-[Changing hotkeys](#changing-hotkeys).
-
-While the companion works the overlay shows, in order: `Recording 00:04` (or `Dictating 00:07` for
-the `dictate` combo) -> `Transcribing...` -> `Formatting...` -> `Ready`. It never takes focus: the
-window carries
-`WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`, so your caret stays where it was.
 
 ---
 
@@ -647,7 +514,7 @@ Code, while missing one costs a convenience.
 ### Which prompt runs
 
 Which prompt a request gets is decided entirely by the endpoint the caller uses - there is no "mode"
-field in any request body. The companion picks with its two hotkeys, `record` for the task prompt
+field in any request body. The plugin always calls `/v1/process`, so the task prompt is what a
 and `dictate` for the dictation one (see [Hotkeys](#hotkeys)); `POST /v1/transform`'s `dictation`
 field picks it when replaying text without a microphone (see [API](#api)). **The IntelliJ plugin has
 only one trigger and always calls `/v1/process`: there is no dictation prompt inside the IDE.**
@@ -709,7 +576,7 @@ practically never carries Cyrillic. One Cyrillic word is therefore enough.
 
 Naming a language instead pins it whatever was spoken, which is the whole point of keeping the two
 separate: dictate in Russian, get the task in English, paste it into a repository where everything
-is written in English. The companion and the plugin both offer `Auto` alongside the real languages,
+is written in English. The plugin offers `Auto` alongside the real languages,
 and `## LANGUAGE <code>` in the prompt files is what decides which languages can actually be
 written well - a code with no section of its own falls back to the English one.
 
@@ -806,24 +673,6 @@ The **plugin** needs no configuration. It reads `.vox.md` from the root of the o
 it, and sends the project name alongside for the backend's logs. Set *Max `.vox.md` size* to `0` in
 **Settings | Tools | Vox** to switch the whole thing off.
 
-The **companion** has no IDE to ask, so it works it out from the title of the window that was
-focused when you pressed the hotkey, against a list you give it in `config/client.yaml`:
-
-```yaml
-project:
-  roots:
-    - "C:/Users/you/IdeaProjects/jigward"
-    - "C:/Users/you/IdeaProjects/vox"
-  file_name: ".vox.md"
-  detect_from_window: true
-  max_bytes: 8000
-```
-
-A root matches when its folder name occurs in the window title, case-insensitively, which is how
-IntelliJ and most editors title their windows; the longest matching folder name wins, so a root
-named `vox` cannot shadow one named `vox-client`. With `roots: []` - the default - or
-`detect_from_window: false`, no project context is ever sent.
-
 Nothing here can cost you a request: a missing file, an unreadable one, an empty one or no match at
 all simply means no project context, and the request goes out without it.
 
@@ -844,23 +693,6 @@ disk is [tracing](#tracing-a-request), which is off unless you switch it on.
 ## Customising
 
 ### Changing hotkeys
-
-Edit `hotkeys` in `config/client.yaml`:
-
-```yaml
-hotkeys:
-  record: "ctrl+alt+space"
-  dictate: "ctrl+alt+d"
-  cancel: "esc"
-```
-
-A binding is `mod+mod+key`: modifiers are `ctrl`, `alt`, `shift`, `win` (aliases `control`,
-`option`, `cmd`/`super`/`meta`/`windows` are accepted), and exactly one trigger key -
-`space`, `esc`, `a`-`z`, `0`-`9`, `f1`-`f12`. `record` and `dictate` must parse to different combos,
-or the companion refuses to start with `hotkeys.dictate: must differ from hotkeys.record, or it
-never fires`. Restart the companion to apply. An unparseable combo, or one whose trigger key the
-listener never reports, makes the companion exit with `config error: ...` instead of starting
-half-configured.
 
 ### Adding glossary words
 
@@ -883,25 +715,6 @@ The glossary is baked into the image, so apply changes with:
 ```powershell
 docker compose up -d --build backend
 ```
-
-### Choosing a different microphone
-
-```powershell
-uv run vox-client --list-devices
-```
-
-prints `index  name  (rate Hz)`. Put either the index or a distinctive substring of the name into
-`config/client.yaml`:
-
-```yaml
-audio:
-  input_device: 3          # or: "Yeti"
-  max_seconds: 120.0
-  sample_rate: null        # null = the device's native rate; the server resamples to 16 kHz
-```
-
-A string matches the first input device whose name contains it, case-insensitively. `null` means
-the Windows default input device.
 
 ### Choosing a different local model
 
@@ -1158,7 +971,7 @@ Trimmed, with the long text cut - a real file carries all of it:
 | Why did the model answer *that*? | `prompt.system` and `prompt.user`, verbatim and complete - the prompt's instructions plus the project context in the system prompt, the glossary and your transcript in the user message, the transcript last inside its `<transcript>` tag. `llm.model` and `llm.temperature` say who answered and how loosely. |
 | Which prompt ran, task or dictation? | `prompt.kind`. `endpoint` cannot tell you: it names the pipeline stage, not the HTTP path, so both `/v1/process` and `/v1/dictate` write `endpoint: "process"`. |
 | Why was it slow? | `timings_ms` - `transcription` against `llm` says which half to blame. A slow first half with `stt.device: "cpu"` is the CUDA fallback; a slow `llm` half is usually a model too big for the GPU (see the VRAM note above). `stt.duration_ms` and `llm.duration_ms` are the stages themselves, the `timings_ms` pair the wall clock around them. |
-| What was actually delivered? | `output.text` - what the plugin typed or the companion pasted, identical to `llm.cleaned_output` unless `output.fell_back_to_transcript` is `true`, in which case it is the raw transcript instead. |
+| What was actually delivered? | `output.text` - what the plugin typed, identical to `llm.cleaned_output` unless `output.fell_back_to_transcript` is `true`, in which case it is the raw transcript instead. |
 | Where did the message diverge from what I said? | `analysis.fields` - `action` and `target` are the verb the model thought it heard and what it aimed it at, `constraints` the limits it kept, `uncertainty` what it read as hedged. A constraint you spoke that is missing from the list is the fastest way to see the rewrite dropped it. |
 | Why did a "use a subagent" line appear? | `analysis.fields.claude_code` - `tool` is what the second pass chose and `why` quotes the words that decided it. `parsed: false` with a filled `raw_output` means the pass ran and could not be read, so no line was appended at all. |
 | It failed - on what? | `status` is `"error"`, and `error.type` / `error.message` name the exception. Failed requests are traced too, with every stage that completed before the failure filled in, which is usually the point. |
@@ -1184,19 +997,15 @@ open is always a complete one.
 
 | Symptom | Cause and fix |
 |---|---|
-| Overlay says `Service unavailable` | The backend is not reachable on `127.0.0.1:8765`. The companion retries once automatically and then discards the audio. Check `docker compose ps`, then `docker compose logs backend`. Note the port is published as `127.0.0.1:8765:8765` - loopback only, by design. |
 | Overlay says `Backend warming up`, or requests answer `warming` | Whisper is still loading; the first start also downloads the weights. Watch `docker compose logs -f backend` until `stt ready:`. `/health` always returns HTTP 200 - read `status` from the body. |
-| `Backend timeout` | The request exceeded the client's budget - `server.timeout_seconds` (180 s) for the companion, *Request timeout* (180 s) for the plugin - or the backend's `LLM_TIMEOUT_SECONDS` (120 s). Usually a model too large for the GPU, so it is running partly on the CPU. See the VRAM note above. |
+| `Backend timeout` | The request exceeded the plugin's *Request timeout* (180 s) or the backend's `LLM_TIMEOUT_SECONDS` (120 s). Usually a model too large for the GPU, so it is running partly on the CPU. See the VRAM note above. |
 | `stt.device` is `cpu` | CUDA was not usable at load time, so it fell back (and `float16` downgraded to `int8`). Re-run the `docker run --gpus all ... nvidia-smi` check, restart Docker Desktop, and make sure the backend image is the `-cudnn-` CUDA flavour - CTranslate2 4.8.2 needs cuDNN 9 at runtime, which the plain runtime image does not ship. |
 | `llm.ready` is `false` | The container cannot reach the model server. For a Windows-side Ollama, `OLLAMA_HOST=0.0.0.0` must be set *and Ollama restarted*; `LLM_BASE_URL` must use `host.docker.internal`, not `127.0.0.1` (inside the container that is the container itself). Test with the `urllib` one-liner above, and check the Windows firewall. |
 | `Ctrl+Alt+Shift+D` does nothing in the IDE | (1) Something else owns the combo - **Settings -> Keymap**, search for `Vox`, and rebind whichever action loses. (2) There is no open project: both actions are disabled on the welcome screen. (3) The plugin is not installed or not enabled - check **Settings -> Plugins**, and look for the `Vox` status bar widget. |
 | The plugin copies the result instead of typing it | The notification says why: no terminal tab is open, the Terminal plugin is disabled, *Type the result into the terminal* is off in **Settings -> Tools -> Vox**, or the terminal API is not one Vox recognises. Open a terminal tab, or paste with `Ctrl+V`. |
-| `.vox.md` seems to be ignored | Plugin: the file must sit in the project root itself, be non-empty, and *Max `.vox.md` size* must not be `0`. Companion: the project's directory must be listed in `project.roots` and its folder name must appear in the title of the window you were in. The companion logs the reason at INFO as `project_status=` in `%LOCALAPPDATA%\vox\client.log`, the plugin at `DEBUG`, and the backend logs `project=<name> project_bytes=<n>` for every request that carried one. To see the text that actually arrived, switch [tracing](#tracing-a-request) on. |
-| Hotkey does nothing | (1) The companion is not running - look for the tray icon. (2) Something else owns the combo; try another. (3) **The target app is elevated.** Windows refuses synthetic input from a lower-integrity process, so if IntelliJ runs as Administrator the companion must be elevated too - run it as Administrator, or better, stop running the IDE elevated. (4) A malformed binding: the companion prints `config error:` naming the offending key and exits with code 2. (5) An unsupported trigger key - only the keys listed under [Changing hotkeys](#changing-hotkeys) are recognised. |
+| `.vox.md` seems to be ignored | The file must sit in the project root itself, be non-empty, and *Max `.vox.md` size* must not be `0`. The plugin logs the reason at `DEBUG`, and the backend logs `project=<name> project_bytes=<n>` for every request that carried one. To see the text that actually arrived, switch [tracing](#tracing-a-request) on. |
 | Recording never stops | Only the trigger key's release stops it, and `audio.max_seconds` (120 s) caps it regardless. Press `Esc` to discard. |
-| `Microphone unavailable` / `Microphone error` | The device is missing, in use exclusively by another app (Zoom, Teams, OBS), or blocked. Check Settings -> Privacy & security -> Microphone -> "Let desktop apps access your microphone", then `uv run vox-client --list-devices` and pin `audio.input_device`. |
 | `No audio captured` | The stream opened but produced no frames - almost always the wrong input device, or a muted mic. |
-| Text pasted into the wrong window | Should not happen: with `paste.only_if_target_window_unchanged: true` the companion compares the foreground window against the one recorded when you started speaking and, if focus moved, copies instead of pasting and shows `Copied - focus changed` - press `Ctrl+V` yourself. If you disabled that check, this is why. The companion also waits (up to 1 s) for you to release `Ctrl+Alt` before pasting, so the target receives `Ctrl+V` and not `Ctrl+Alt+V`. |
 | Clipboard not restored, or `Clipboard busy` | The Windows clipboard is frequently locked by another process; `set_text` retries a few times. Restore happens `paste.restore_delay_ms` (600 ms) after the paste and is unconditional, so anything you copy inside that short window is overwritten by the restored text; lengthen or disable it if that bites. Failures to save or restore are logged and never fail the request. Set `paste.preserve_clipboard: false` to switch the behaviour off. |
 | Hotkeys stop working on a Russian layout | Handled: when a `KeyCode` has no ASCII `char` (as with Cyrillic), the key is derived from the virtual-key code, so `Ctrl+Alt+D` fires on the physical `D`/`В` key in either layout. If it still misbehaves, run with `logging.level: DEBUG` and check which key name the listener reports. |
 | Wrong words for English terms | Add the spoken form to `config/glossary.yaml` and rebuild the backend. |
@@ -1222,20 +1031,6 @@ is off. `LOG_TEXT=true` together with `LOG_LEVEL=DEBUG` adds the transcript and 
 log - a debugging switch, not a setting (see [Privacy](#privacy)). For the text itself and the
 whole prompt, use [tracing](#tracing-a-request) rather than turning the log up.
 
-The companion logs to `%LOCALAPPDATA%\vox\client.log` (rotated at 1 MB, two old files kept) - it
-has no console of its own when `start.ps1` launches it - and prints one INFO line per recording
-before it sends:
-
-```
-sending prompt=task project=Jigward project_file=C:\src\Jigward\.vox.md project_bytes=1840 truncated=False project_status=ok window=328964
-```
-
-`prompt` is `task` or `dictation`, whichever combo was held down. `project_status` is why the
-project context is or is not there: `ok`, `off` (detection disabled or no usable window title),
-`no-match` (no configured root's folder name occurs in the window title), or `missing` /
-`unreadable` / `empty` for a root that matched but whose file could not be used.
-`logging.level: DEBUG` in `config/client.yaml` adds the rest. The plugin logs into the IDE's own
-`idea.log`.
 
 ---
 
@@ -1261,8 +1056,7 @@ by the client; the server truncates again at `max_project_bytes` and warns rathe
 request, then splits off its `## SYSTEM` section as extra system instructions. `project_name` is a
 short name used for log lines only and never reaches the model. `context` is recent conversation
 the caller chose to attach so speech can refer to it, truncated at `max_context_bytes` the same way.
-`client_id` identifies the caller in the logs - `vox-windows` for the companion, `vox-idea` for the
-plugin.
+`client_id` identifies the caller in the logs - `vox-idea` for the plugin.
 
 `language` is the language the **answer** is written in, defaulting to `DEFAULT_LANGUAGE`
 (`auto`). It is deliberately not tied to the spoken language: speech recognition keeps using
@@ -1293,9 +1087,7 @@ the `language` a response reports is always a real one, never `"auto"`.
 }
 ```
 
-`output` is what the client delivers - typed into the terminal by the plugin, pasted by the
-companion. `POST /v1/dictate` returns the identical shape, with `output` punctuated rather than
-formalised.
+`output` is what the plugin types into the terminal.
 
 `analysis` is how the second pass read the speech, and it is `null` whenever that pass could not
 answer - see [The analysis pass](#the-analysis-pass---analysismd). Its fields quote the speech, so
@@ -1346,49 +1138,6 @@ Interactive docs are at <http://127.0.0.1:8765/docs>.
 
 ---
 
-## Autostart (optional)
-
-This is about the companion only - the plugin starts with the IDE and needs nothing here.
-
-Not a Windows Service - deliberately. A service runs in session 0, where it has no desktop, no
-clipboard, no foreground window and no way to send input to your applications; everything the
-companion does would break. It must run as a normal process in your interactive session.
-
-Build the exe (see below), then:
-
-```powershell
-$startup  = [Environment]::GetFolderPath("Startup")
-$shell    = New-Object -ComObject WScript.Shell
-$lnk      = $shell.CreateShortcut((Join-Path $startup "vox.lnk"))
-$lnk.TargetPath       = (Resolve-Path .\dist\vox.exe).Path
-$lnk.WorkingDirectory = (Get-Location).Path
-$lnk.Description      = "vox push-to-talk companion"
-$lnk.Save()
-```
-
-`Win+R` -> `shell:startup` opens that folder to check or remove it. The backend starts itself:
-compose services use `restart: unless-stopped`, so they come back with Docker Desktop.
-
----
-
-## Building the standalone exe
-
-```powershell
-.\scripts\build-client.ps1
-```
-
-produces `dist\vox.exe` - a single file you can run without a Python install and point the
-startup shortcut at. It reads `config/client.yaml` from the working directory, then from beside the `.exe`
-(so `dist\config\client.yaml` or a `config\` folder next to wherever you copy it works), and it
-still needs the backend running.
-
-The exe bundles only the companion: `httpx`, `pyyaml`, `numpy`, `sounddevice`, `pynput`, `pywin32`,
-`pystray`, `pillow`, `tkinter`. It deliberately **excludes** `faster-whisper`, `ctranslate2`, CUDA
-and everything LLM-related, which live in the container and would add gigabytes of dead weight to
-a binary that never calls them.
-
----
-
 ## Project layout
 
 ```
@@ -1403,10 +1152,8 @@ vox/
 ├─ dictation.md                  the dictation prompt: same format, punctuates instead of formalising
 ├─ .vox.md                       this repository's own project context, as a worked example
 ├─ config/
-│  ├─ client.example.yaml        every companion setting; copy to client.yaml
 │  └─ glossary.yaml              spoken form -> canonical engineering term
-├─ scripts/                      install-client.ps1, start.ps1, stop.ps1,
-│                               build-client.ps1, smoke-test.ps1, show-trace.ps1
+├─ scripts/                      smoke-test.ps1, show-trace.ps1
 ├─ plugin/                       the IntelliJ IDEA plugin (Kotlin, Gradle)
 │  ├─ README.md                  build, install, settings, terminal delivery
 │  ├─ build.gradle.kts           IntelliJ Platform Gradle plugin, JVM 21 target
@@ -1429,16 +1176,6 @@ vox/
 │  │  ├─ processor.py            STT -> prompt -> LLM pipeline
 │  │  ├─ trace.py                opt-in per-request JSON trace (VOX_TRACE_DIR)
 │  │  └─ health.py               server state and /health assembly
-│  └─ vox_client/
-│     ├─ main.py                 wiring, delivery, tray, CLI
-│     ├─ state.py                hotkey parsing and the push-to-talk state machine (pure logic)
-│     ├─ hotkeys.py              pynput adapter, layout-independent key normalisation
-│     ├─ recorder.py             sounddevice capture, in-memory WAV encoding
-│     ├─ api_client.py           httpx calls to the backend
-│     ├─ clipboard.py            Win32 clipboard, SendInput paste, window handles
-│     ├─ overlay.py              tkinter status overlay that never takes focus
-│     ├─ project.py              finds the focused project's .vox.md and truncates it
-│     └─ config.py               client.yaml loading and validation
 └─ tests/
    ├─ conftest.py                fakes and builders shared by the suite
    ├─ unit/                      no GPU, microphone, network or Docker required
@@ -1455,16 +1192,14 @@ vox/
 ## Development
 
 ```powershell
-uv sync --all-extras          # both extras plus the dev group
+uv sync --extra server        # the server extra plus the dev group
 uv run ruff check .
 uv run ruff format .
 uv run mypy
 uv run pytest
 ```
 
-`scripts\install-client.ps1` syncs `--extra client` only, which uninstalls the server packages
-the tests import. Run `uv sync --all-extras` before `uv run pytest`, and re-run the installer
-afterwards if you want the companion's lean environment back.
+`uv sync --extra server` installs everything the tests import.
 
 `pytest` is configured with `-m 'not integration and not eval'`, so the default run needs neither a
 GPU nor a backend. To run the integration tests against a live stack:
@@ -1521,7 +1256,7 @@ a JetBrains Runtime rather than the JDK on PATH.
 
 ### Why Python 3.14 everywhere
 
-Backend and companion both target 3.14, with no 3.13 fallback anywhere. The usual reason to hold
+The backend targets 3.14, with no 3.13 fallback anywhere. The usual reason to hold
 back is the STT stack, so it was checked first, in the actual image
 (`nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04`): `faster-whisper==1.2.1` and `ctranslate2==4.8.2`
 publish working cp314 wheels, they import cleanly, `ctranslate2.get_cuda_device_count()` returns 1,
