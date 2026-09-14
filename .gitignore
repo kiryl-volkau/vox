@@ -49,6 +49,7 @@ models/
 .idea/tasks.xml
 .idea/usage.statistics.xml
 .idea/dictionaries/
+.idea/vox-transcripts.xml
 .vscode/
 
 # OS

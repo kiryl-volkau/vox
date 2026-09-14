@@ -159,7 +159,7 @@ class VoxDictationService(private val project: Project) {
                             finished != null && finished.output.isNotBlank() ->
                                 deliver(finished, language, device, contextExchanges)
                             finished != null -> {
-                                record(finished.transcript, "", language, device, contextExchanges, "", "the backend returned no text")
+                                record(finished.transcript, "", language, device, contextExchanges, "", "the backend returned no text", finished.analysis)
                                 VoxNotifications.warn(project, "the backend returned no text")
                             }
                             else -> {
@@ -182,7 +182,7 @@ class VoxDictationService(private val project: Project) {
             VoxNotifications.info(project, reason + "on the clipboard")
         }
         val delivery = if (intoTerminal) "terminal" else "clipboard"
-        record(result.transcript, result.output, language, device, exchanges, delivery, null)
+        record(result.transcript, result.output, language, device, exchanges, delivery, null, result.analysis)
     }
 
     private fun record(
@@ -193,6 +193,7 @@ class VoxDictationService(private val project: Project) {
         exchanges: Int,
         delivery: String,
         error: String?,
+        analysis: VoxAnalysis? = null,
     ) {
         VoxTranscriptStore.getInstance(project)
             .add(
@@ -203,6 +204,7 @@ class VoxDictationService(private val project: Project) {
                 contextExchanges = exchanges,
                 delivery = delivery,
                 error = error,
+                analysis = analysis,
             )
     }
 

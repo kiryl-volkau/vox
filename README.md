@@ -520,7 +520,8 @@ window carries
 
 The backend runs one of two prompts, chosen by the endpoint the caller uses: `prompt.md` in the
 repository root formalises the transcript into a task, and `dictation.md` beside it only cleans the
-transcript up without changing what it says. Both are a markdown file with a `## SYSTEM` section and
+transcript up without changing what it says. A third, `analysis.md`, runs after either of them and
+writes no message at all - it reports how the speech was read. Both are a markdown file with a `## SYSTEM` section and
 a `## USER` section, no front matter, and both take the same placeholders, `{project}`, `{glossary}`
 and `{transcript}`.
 
@@ -607,6 +608,43 @@ It guarantees:
 - **Identifiers, numbers and English terms are left exactly as said**; the glossary changes spelling
   only, never content.
 
+### The analysis pass - `analysis.md`
+
+Every request that produced a message is then sent back to the model a second time, with the
+transcript and the finished message, and asked one question: how was that speech read? The answer
+is a JSON object constrained by a schema (`response_format`), and it reaches you as `analysis` on
+the response and as the `analysis` block of [a trace](#tracing-a-request):
+
+```json
+{
+  "action": "прогони",
+  "target": "эти изменения",
+  "constraints": ["перед тем как я закоммичу"],
+  "uncertainty": [],
+  "claude_code": { "tool": "subagent", "why": "прогони проверку" }
+}
+```
+
+It is a second call rather than extra fields on the rewrite, and that is not an accident: folding
+the reporting into the one call measurably cost the rewrite itself, with English requests coming
+back in Russian on a third of the evaluation set. Asking twice keeps the message exactly as good as
+it was and puts the whole cost in latency - roughly 700-900 ms on this machine, about double the
+LLM half of a request.
+
+**Nothing about it can fail your request.** No analysis prompt configured, an endpoint that rejects
+`response_format` even on the retry, a timeout, a reply that will not parse - each of those ends
+with `analysis: null` and the message you would have got anyway.
+
+`claude_code` is the one field that changes the message: when the pass names a tool, a single line
+is appended to what you are about to send Claude Code - "Use a subagent for this.", "Review this
+rather than change it.", "Plan this first, do not edit yet." The line is written by the server, not
+the model, so the same decision always reads the same way; the model only picks which of the four
+values applies, and `"none"` - ordinary work - is by far the most common. Dictation never takes a
+line, because dictation hands back the speaker's own words and an instruction there was never
+spoken. How often the choice is right is measured by `tests/eval/tools.yaml`, which is deliberately
+weighted towards `"none"`: naming a tool nobody asked for puts an instruction in front of Claude
+Code, while missing one costs a convenience.
+
 ### Which prompt runs
 
 Which prompt a request gets is decided entirely by the endpoint the caller uses - there is no "mode"
@@ -637,7 +675,8 @@ files are parsed and rendered the same way.
 
 Edit `prompt.md` or `dictation.md` directly. **No code change is needed** - `vox-server` reads each
 file once at startup (`--prompt-path` / `PROMPT_PATH`, default `prompt.md`; `--dictation-prompt-path`
-/ `DICTATION_PROMPT_PATH`, default `dictation.md`). A native run just needs a restart; in Docker both
+/ `DICTATION_PROMPT_PATH`, default `dictation.md`; `--analysis-prompt-path` /
+`ANALYSIS_PROMPT_PATH`, default `analysis.md`). A native run just needs a restart; in Docker both
 files are baked into the image exactly like the glossary, so editing either needs a rebuild:
 
 ```powershell
@@ -874,6 +913,7 @@ not an override, so the container keeps working on environment variables alone.
 | `--llm-max-tokens` | `LLM_MAX_TOKENS` | `1024` |
 | `--prompt-path` | `PROMPT_PATH` | `prompt.md` |
 | `--dictation-prompt-path` | `DICTATION_PROMPT_PATH` | `dictation.md` |
+| `--analysis-prompt-path` | `ANALYSIS_PROMPT_PATH` | `analysis.md` |
 | `--glossary-path` | `GLOSSARY_PATH` | `config/glossary.yaml` |
 | `--processing-concurrency` | `PROCESSING_CONCURRENCY` | `1` |
 | `--log-level` | `LOG_LEVEL` | `INFO` |
@@ -902,7 +942,7 @@ uv run vox-server --llm-base-url http://127.0.0.1:11434/v1 --stt-model small --l
 
 Note `127.0.0.1` rather than `host.docker.internal`: outside a container the model server is just
 localhost. Paths resolve against the working directory, so run this from the repo root or pass
-`--prompt-path`, `--dictation-prompt-path` and `--glossary-path` as well. A native run has to supply
+`--prompt-path`, `--dictation-prompt-path`, `--analysis-prompt-path` and `--glossary-path` as well. A native run has to supply
 its own CUDA and cuDNN runtime for CTranslate2 - which is precisely what the container exists to
 avoid - so on Windows expect `stt.device` to come up `cpu` unless you have already installed them.
 
@@ -1088,6 +1128,8 @@ Trimmed, with the long text cut - a real file carries all of it:
 | Which prompt ran, task or dictation? | `prompt.kind`. `endpoint` cannot tell you: it names the pipeline stage, not the HTTP path, so both `/v1/process` and `/v1/dictate` write `endpoint: "process"`. |
 | Why was it slow? | `timings_ms` - `transcription` against `llm` says which half to blame. A slow first half with `stt.device: "cpu"` is the CUDA fallback; a slow `llm` half is usually a model too big for the GPU (see the VRAM note above). `stt.duration_ms` and `llm.duration_ms` are the stages themselves, the `timings_ms` pair the wall clock around them. |
 | What was actually delivered? | `output.text` - what the plugin typed or the companion pasted, identical to `llm.cleaned_output` unless `output.fell_back_to_transcript` is `true`, in which case it is the raw transcript instead. |
+| Where did the message diverge from what I said? | `analysis.fields` - `action` and `target` are the verb the model thought it heard and what it aimed it at, `constraints` the limits it kept, `uncertainty` what it read as hedged. A constraint you spoke that is missing from the list is the fastest way to see the rewrite dropped it. |
+| Why did a "use a subagent" line appear? | `analysis.fields.claude_code` - `tool` is what the second pass chose and `why` quotes the words that decided it. `parsed: false` with a filled `raw_output` means the pass ran and could not be read, so no line was appended at all. |
 | It failed - on what? | `status` is `"error"`, and `error.type` / `error.message` name the exception. Failed requests are traced too, with every stage that completed before the failure filled in, which is usually the point. |
 
 Sections that do not apply to a request are `null` rather than empty: `audio` and `stt` for
@@ -1205,13 +1247,25 @@ never reaches a prompt, `language` means the spoken language instead.
   "transcript": "посмотри этот сервис тут мембершип почему-то второй раз достается",
   "output": "Проверь, зачем в текущем сервисе membership загружается второй раз.",
   "language": "ru",
-  "timings_ms": { "transcription": 380, "llm": 910, "total": 1298 }
+  "timings_ms": { "transcription": 380, "llm": 910, "total": 1298 },
+  "analysis": {
+    "action": "посмотри",
+    "target": "мембершип в этом сервисе",
+    "constraints": [],
+    "uncertainty": ["почему-то"],
+    "claude_code": { "tool": "none", "why": "" }
+  }
 }
 ```
 
 `output` is what the client delivers - typed into the terminal by the plugin, pasted by the
 companion. `POST /v1/dictate` returns the identical shape, with `output` punctuated rather than
 formalised.
+
+`analysis` is how the second pass read the speech, and it is `null` whenever that pass could not
+answer - see [The analysis pass](#the-analysis-pass---analysismd). Its fields quote the speech, so
+they stay in the spoken language whatever `language` the message came back in. Nothing in it is
+needed to use `output`; it is there to be read when a message came out wrong.
 
 Error codes: `empty_audio` (400), `audio_too_large` (413), `invalid_request` (422),
 `empty_transcript` (422), `llm_error` (502), `stt_unavailable` (503), `llm_unavailable` (503),
@@ -1310,6 +1364,7 @@ vox/
 ├─ uv.lock
 ├─ .env.example                  every backend setting, documented; copy to .env
 ├─ prompt.md                     the task prompt: SYSTEM + USER, {project}/{glossary}/{transcript}
+├─ analysis.md                   the second pass: how the speech was read, as JSON
 ├─ dictation.md                  the dictation prompt: same format, punctuates instead of formalising
 ├─ .vox.md                       this repository's own project context, as a worked example
 ├─ config/

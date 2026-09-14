@@ -1,0 +1,84 @@
+# Evaluation set for the Claude Code hint: which affordance a spoken job calls for.
+#
+# The hint is appended to the message the person is about to send to Claude Code, so a wrong
+# one is not a cosmetic failure - it tells Claude Code to do something nobody asked for. That
+# asymmetry is what the set is shaped around: there are more "none" cases here than anything
+# else, because "none" is the answer that costs nothing when it is wrong.
+#
+# Fields:
+#   id          - stable identifier; it names the test case in pytest output.
+#   transcript  - the input, as the recogniser would have produced it.
+#   language    - the output language of the request, which the hint follows.
+#   tool        - the one right answer: none | subagent | review | plan.
+#   intent      - one line saying why that is the right answer, for whoever reads a failure.
+#   known_gap   - set only when the pipeline is known to answer this wrongly today. The case
+#                 still runs and still counts towards the pass rate; it is marked xfail, so a
+#                 red suite means a regression. Delete the field when it starts passing.
+
+cases:
+  - id: pre-commit-check
+    transcript: слушай прогони проверку по этим изменениям перед тем как я закоммичу посмотри что не сломалось
+    language: en
+    tool: subagent
+    intent: A self-contained verification pass over a change, with a finding to bring back.
+
+  - id: investigate-a-failure
+    transcript: разберись почему падает вот этот тест и вернись с ответом
+    language: en
+    tool: subagent
+    intent: Open-ended investigation; the speaker asks explicitly to be come back to.
+
+  - id: sweep-every-controller
+    transcript: пройдись по всем контроллерам и найди где мы не проверяем organization
+    language: en
+    tool: subagent
+    intent: One question swept across many files, with a list of places as the answer.
+    known_gap: >-
+      qwen2.5:7b reads this as ordinary work and answers "none". The speech carries no word
+      about delegating and the verb is an imperative like any edit, so the only thing marking
+      it out is the breadth of the search; a larger LLM_MODEL is what closes it.
+
+  - id: agree-the-approach-first
+    transcript: давай сначала обсудим как это делать я не хочу чтобы ты сразу начал править
+    language: en
+    tool: plan
+    intent: Asks for the approach to be settled before any edit is made.
+
+  - id: tell-me-what-is-wrong
+    transcript: посмотри этот пулл реквест и скажи что не так но не правь
+    language: en
+    tool: review
+    intent: Wants to be told what is wrong and explicitly not to have it changed.
+
+  - id: an-edit-is-not-a-subagent
+    transcript: добавь метод в этот класс только в этом модуле не трогая тесты
+    language: en
+    tool: none
+    intent: Ordinary editing, however many constraints are attached to it.
+
+  - id: a-look-is-not-a-subagent
+    transcript: посмотри системные промытоты в этом сервисе они кажется дублируются
+    language: en
+    tool: none
+    intent: One service, one thing to look at; nothing here needs its own investigation.
+    known_gap: >-
+      qwen2.5:7b answers "subagent". "Посмотри ... кажется дублируются" reads to it as an
+      investigation because the speaker is unsure, but hedging is not delegation.
+
+  - id: an-account-is-not-a-job
+    transcript: я просто посмотрел как отработал линтер и сколько заняла проверка
+    language: en
+    tool: none
+    intent: A report of what the speaker already did. There is no job in it at all.
+
+  - id: a-refactor-is-not-a-subagent
+    transcript: вынеси этот запрос в репу а то он в контроллере висит
+    language: ru
+    tool: none
+    intent: A single obvious edit in one place.
+
+  - id: a-question-is-not-a-job
+    transcript: я не понял а что в приложении грузятся запросы на бэкенд из роута
+    language: ru
+    tool: none
+    intent: A question being passed on, not work being handed out.

@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from .analysis import Analysis
+
 
 class TimingsMs(BaseModel):
     transcription: int = 0
@@ -25,6 +27,7 @@ class ProcessResponse(BaseModel):
     output: str
     language: str
     timings_ms: TimingsMs
+    analysis: Analysis | None = None
 
 
 class TranscribeResponse(BaseModel):
@@ -46,6 +49,7 @@ class TransformResponse(BaseModel):
     request_id: str
     output: str
     timings_ms: TimingsMs
+    analysis: Analysis | None = None
 
 
 class SttHealth(BaseModel):

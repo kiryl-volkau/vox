@@ -124,14 +124,18 @@ class Prompt:
         }
         return _PLACEHOLDERS.sub(lambda match: replacements[match.group(0)], self.system_prompt)
 
-    def render_user(self, transcript: str, glossary: str) -> str:
-        """Return the user message with ``{transcript}`` and ``{glossary}`` substituted.
+    def render_user(self, transcript: str, glossary: str, output: str = "") -> str:
+        """Return the user message with ``{transcript}``, ``{glossary}`` and ``{output}`` filled.
 
+        ``output`` is the message an earlier pass produced, which only the analysis prompt asks
+        for; the prompts that rewrite speech do not carry the placeholder and ignore it.
         Placeholders the template does not contain are simply not substituted, and any other
         brace-delimited text is left exactly as written.
         """
-        return self.user_template.replace("{transcript}", transcript).replace(
-            "{glossary}", glossary
+        return (
+            self.user_template.replace("{transcript}", transcript)
+            .replace("{glossary}", glossary)
+            .replace("{output}", output)
         )
 
     def language_block(self, language: str) -> str:

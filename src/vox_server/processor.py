@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
+from .analysis import RESPONSE_FORMAT, Analysis, parse_analysis, with_hint
 from .config import Settings, redacted_base_url
 from .glossary import Glossary
 from .languages import normalise_language
-from .llm import OpenAICompatibleClient, clean_llm_output
+from .llm import LlmError, LlmResponseError, OpenAICompatibleClient, clean_llm_output
 from .models import (
     ProcessResponse,
     TimingsMs,
@@ -21,6 +23,19 @@ from .trace import RequestTrace, TraceWriter
 from .transcription import Transcriber
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class PromptResult:
+    """One prompt run: the message to hand back, and the model's own reading of it.
+
+    ``analysis`` is None whenever the reply could not be read as the schema - a backend that
+    refused ``response_format``, a model that answered in prose, or malformed JSON. The
+    message is usable either way; only the reporting is lost.
+    """
+
+    output: str
+    analysis: Analysis | None
 
 
 class ProcessingError(RuntimeError):
@@ -80,6 +95,9 @@ class Processor:
 
     ``trace_writer`` is the opt-in diagnostic sink: when it is None nothing is written to
     disk, which is the default and the only behaviour the product promises.
+
+    ``analysis_prompt`` drives the second pass that reports how a request was read. Leaving it
+    None turns the reporting off entirely and costs a request nothing but the report.
     """
 
     def __init__(
@@ -91,6 +109,8 @@ class Processor:
         glossary: Glossary,
         settings: Settings,
         trace_writer: TraceWriter | None = None,
+        *,
+        analysis_prompt: Prompt | None = None,
     ) -> None:
         self._transcriber = transcriber
         self._llm = llm
@@ -100,6 +120,7 @@ class Processor:
         self._glossary_blocks: dict[str, str] = {}
         self._settings = settings
         self._trace_writer = trace_writer
+        self._analysis_prompt = analysis_prompt
         self._semaphore = asyncio.Semaphore(max(1, settings.processing_concurrency))
 
     @property
@@ -161,7 +182,7 @@ class Processor:
                 if not transcript:
                     raise EmptyTranscriptError("speech recognition produced an empty transcript")
                 llm_started = time.perf_counter()
-                output = await self._run_prompt(
+                run = await self._run_prompt(
                     transcript, project, context, trace, dictation=dictation, language=resolved
                 )
                 timings = TimingsMs(
@@ -169,13 +190,14 @@ class Processor:
                     llm=_elapsed_ms(llm_started),
                     total=_elapsed_ms(started),
                 )
-            self._record_output(trace, output, timings)
+            self._record_output(trace, run.output, timings)
             return ProcessResponse(
                 request_id=request_id,
                 transcript=transcript,
-                output=output,
+                output=run.output,
                 language=result.language,
                 timings_ms=timings,
+                analysis=run.analysis,
             )
         except BaseException as exc:
             trace.record_error(exc)
@@ -259,16 +281,17 @@ class Processor:
                 raise EmptyTranscriptError("no text to transform")
             async with self._semaphore:
                 llm_started = time.perf_counter()
-                output = await self._run_prompt(
+                run = await self._run_prompt(
                     source, project, context, trace, dictation=dictation, language=resolved
                 )
                 llm_ms = _elapsed_ms(llm_started)
             timings = TimingsMs(transcription=0, llm=llm_ms, total=_elapsed_ms(started))
-            self._record_output(trace, output, timings)
+            self._record_output(trace, run.output, timings)
             return TransformResponse(
                 request_id=request_id,
-                output=output,
+                output=run.output,
                 timings_ms=timings,
+                analysis=run.analysis,
             )
         except BaseException as exc:
             trace.record_error(exc)
@@ -296,7 +319,7 @@ class Processor:
         *,
         dictation: bool,
         language: str,
-    ) -> str:
+    ) -> PromptResult:
         prompt = self._dictation_prompt if dictation else self._prompt
         temperature = (
             self._settings.llm_dictation_temperature
@@ -319,16 +342,72 @@ class Processor:
         cleaned = clean_llm_output(raw).strip()
         trace.llm_raw_output = raw
         trace.llm_cleaned_output = cleaned
-        if cleaned:
-            return cleaned
-        # Losing what someone just said costs more than handing back an unpolished transcript,
-        # so an empty model reply degrades to the transcript instead of failing the request.
-        logger.warning(
-            "request_id=%s the model returned no usable text; falling back to the transcript",
-            trace.request_id,
-        )
-        trace.output_fell_back_to_transcript = True
-        return text
+        if not cleaned:
+            # Losing what someone just said costs more than handing back an unpolished
+            # transcript, so an empty reply degrades to the transcript instead of failing.
+            logger.warning(
+                "request_id=%s the model returned no usable text; falling back to the transcript",
+                trace.request_id,
+            )
+            trace.output_fell_back_to_transcript = True
+            return PromptResult(output=text, analysis=None)
+        analysis = await self._analyse(text, cleaned, trace)
+        trace.analysis = analysis
+        # The dictation prompt hands back the speaker's own words; an instruction appended to
+        # those would be text they never said, so only the task prompt takes a hint.
+        if analysis is not None and not dictation:
+            cleaned = with_hint(cleaned, analysis, language)
+        return PromptResult(output=cleaned, analysis=analysis)
+
+    async def _analyse(self, transcript: str, output: str, trace: RequestTrace) -> Analysis | None:
+        """Ask a second time how the speech was read, and never let the answer matter too much.
+
+        A separate call rather than extra fields on the rewrite: one 7B model asked to do both
+        measurably lost the output language, and the message is what the person is waiting for.
+        The price is a second round trip, which the trace reports separately from the first.
+
+        Returns None for every way this can go wrong - no analysis prompt configured, an
+        endpoint that rejects ``response_format`` even on the retry, a timeout, an unparseable
+        reply. The request still succeeds with its message; only the reporting is lost.
+        """
+        prompt = self._analysis_prompt
+        if prompt is None:
+            return None
+        system = prompt.render_system(ProjectFile())
+        user = prompt.render_user(transcript, "", output)
+        started = time.perf_counter()
+        try:
+            raw = await self._ask_for_analysis(system, user, trace)
+        except LlmError as exc:
+            logger.warning(
+                "request_id=%s the analysis pass failed (%s); the request keeps its message",
+                trace.request_id,
+                exc,
+            )
+            return None
+        trace.analysis_duration_ms = _elapsed_ms(started)
+        trace.analysis_raw_output = raw
+        return parse_analysis(raw)
+
+    async def _ask_for_analysis(self, system: str, user: str, trace: RequestTrace) -> str:
+        """Ask for a schema-constrained reply, falling back to a plain one if that is refused.
+
+        Not every OpenAI-compatible backend knows ``response_format``; one that does not
+        answers 4xx. Temperature is pinned at zero because this pass classifies rather than
+        writes, and a classifier that wanders between runs cannot be evaluated.
+        """
+        try:
+            return await self._llm.chat(
+                system, user, temperature=0.0, response_format=RESPONSE_FORMAT
+            )
+        except LlmResponseError as exc:
+            logger.warning(
+                "request_id=%s the LLM refused a schema-constrained reply (%s); asking plainly",
+                trace.request_id,
+                exc,
+            )
+            trace.analysis_schema_refused = True
+            return await self._llm.chat(system, user, temperature=0.0)
 
     def _record_stt(
         self,

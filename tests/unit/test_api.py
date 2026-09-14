@@ -273,6 +273,7 @@ def test_process_returns_the_documented_payload(
         "output",
         "language",
         "timings_ms",
+        "analysis",
     }
     assert body["output"] == "Проверь membership."
     assert set(body["timings_ms"]) == {"transcription", "llm", "total"}
@@ -299,6 +300,7 @@ def test_dictate_returns_the_documented_payload(
         "output",
         "language",
         "timings_ms",
+        "analysis",
     }
     assert body["request_id"] == response.headers["X-Request-ID"]
 

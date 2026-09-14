@@ -90,6 +90,7 @@ async def _warm_up(
     llm: OpenAICompatibleClient,
     prompt: Prompt,
     dictation_prompt: Prompt,
+    analysis_prompt: Prompt,
     glossary: Glossary,
     settings: Settings,
     trace_writer: TraceWriter | None,
@@ -127,7 +128,14 @@ async def _warm_up(
         logger.info("llm warmup is off; the first request pays whatever the endpoint charges it")
 
     state.processor = Processor(
-        transcriber, llm, prompt, dictation_prompt, glossary, settings, trace_writer
+        transcriber,
+        llm,
+        prompt,
+        dictation_prompt,
+        glossary,
+        settings,
+        trace_writer,
+        analysis_prompt=analysis_prompt,
     )
     state.warming = False
 
@@ -146,6 +154,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     glossary = Glossary.load(settings.glossary_path)
     prompt = load_prompt(settings.prompt_path)
     dictation_prompt = load_prompt(settings.dictation_prompt_path)
+    analysis_prompt = load_prompt(settings.analysis_prompt_path)
     override = runtime_config.load(settings)
     effective = override.applied_to(settings)
     state = ServerState(
@@ -183,7 +192,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     trace_writer = build_trace_writer(settings)
     warmup_task = asyncio.create_task(
         _warm_up(
-            state, transcriber, llm, prompt, dictation_prompt, glossary, settings, trace_writer
+            state,
+            transcriber,
+            llm,
+            prompt,
+            dictation_prompt,
+            analysis_prompt,
+            glossary,
+            settings,
+            trace_writer,
         )
     )
     logger.info("listening on %s:%d (warming up in the background)", settings.host, settings.port)
@@ -234,6 +251,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prompt-path", type=Path, help="markdown file holding the task prompt")
     parser.add_argument(
         "--dictation-prompt-path", type=Path, help="markdown file holding the dictation prompt"
+    )
+    parser.add_argument(
+        "--analysis-prompt-path", type=Path, help="markdown file holding the analysis prompt"
     )
     parser.add_argument("--glossary-path", type=Path, help="glossary YAML file")
     parser.add_argument("--processing-concurrency", type=int, help="concurrent AI pipelines")

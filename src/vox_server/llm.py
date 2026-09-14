@@ -278,13 +278,17 @@ class OpenAICompatibleClient:
         *,
         temperature: float | None = None,
         timeout_seconds: float | None = None,
+        response_format: Mapping[str, Any] | None = None,
     ) -> str:
         """Run one non-streaming chat completion and return the raw assistant content.
 
         The system message is omitted when ``system`` is empty. ``temperature`` and
-        ``timeout_seconds`` override the configured defaults for this call only. The
-        returned string is exactly what the model produced - callers apply
-        ``clean_llm_output`` themselves.
+        ``timeout_seconds`` override the configured defaults for this call only.
+        ``response_format`` is passed through untouched for backends that constrain the reply
+        to a schema; one that does not know the field answers 4xx, which surfaces as
+        LlmResponseError and is the caller's signal to ask again without it. The returned
+        string is exactly what the model produced - callers apply ``clean_llm_output``
+        themselves.
 
         Raises LlmTimeoutError on timeout, LlmUnavailableError when the endpoint is
         unreachable, and LlmResponseError on a non-2xx status or an unusable payload.
@@ -300,6 +304,8 @@ class OpenAICompatibleClient:
             "max_tokens": self._max_tokens,
             "stream": False,
         }
+        if response_format is not None:
+            payload["response_format"] = dict(response_format)
         budget = self._timeout_seconds if timeout_seconds is None else timeout_seconds
         try:
             response = await self._client.post(

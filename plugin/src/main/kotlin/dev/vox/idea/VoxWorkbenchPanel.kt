@@ -59,6 +59,7 @@ internal class VoxWorkbenchPanel(private val project: Project) :
 
     private val transcript = editor(editable = true)
     private val output = editor(editable = false)
+    private val reading = editor(editable = false)
     private val status = JBLabel(" ")
 
     private val promptKind =
@@ -96,9 +97,25 @@ internal class VoxWorkbenchPanel(private val project: Project) :
             add(JBScrollPane(transcript), BorderLayout.CENTER)
             add(controls, BorderLayout.SOUTH)
         }
-        val bottom = JPanel(BorderLayout()).apply {
+        val delivered = JPanel(BorderLayout()).apply {
             add(JBLabel("Output").apply { border = JBUI.Borders.empty(4, 6, 0, 0) }, BorderLayout.NORTH)
             add(JBScrollPane(output), BorderLayout.CENTER)
+        }
+        val read = JPanel(BorderLayout()).apply {
+            add(
+                JBLabel("How it was read").apply {
+                    border = JBUI.Borders.empty(4, 6, 0, 0)
+                    toolTipText = READING_HINT
+                },
+                BorderLayout.NORTH,
+            )
+            add(JBScrollPane(reading), BorderLayout.CENTER)
+        }
+        val bottom = JPanel(BorderLayout()).apply {
+            add(JBSplitter(true, 0.55f).apply {
+                firstComponent = delivered
+                secondComponent = read
+            }, BorderLayout.CENTER)
             add(status.apply { border = JBUI.Borders.empty(2, 6) }, BorderLayout.SOUTH)
         }
         return JPanel(BorderLayout()).apply {
@@ -159,6 +176,7 @@ internal class VoxWorkbenchPanel(private val project: Project) :
         if (entry == null) {
             transcript.text = ""
             output.text = VoxTranscriptStore.EMPTY_TEXT
+            reading.text = ""
             status.text = " "
             runButton.isEnabled = false
             return
@@ -167,6 +185,8 @@ internal class VoxWorkbenchPanel(private val project: Project) :
         transcript.caretPosition = 0
         output.text = if (entry.failed()) entry.error else entry.output
         output.caretPosition = 0
+        reading.text = render(entry)
+        reading.caretPosition = 0
         language.selectedItem = VoxLanguages.normalise(entry.language) ?: VoxLanguages.DEFAULT_CODE
         status.text = describe(entry)
         runButton.isEnabled = true
@@ -236,11 +256,60 @@ internal class VoxWorkbenchPanel(private val project: Project) :
                         }
                         output.text = finished.output
                         output.caretPosition = 0
+                        reading.text = render(finished.analysis)
+                        reading.caretPosition = 0
                         val kind = if (dictation) "dictation" else "task"
                         status.text = "$kind prompt · $chosen · ${finished.totalMs} ms · not stored"
                     }
                 }
             )
+    }
+
+    /** The stored reading of one entry, or a line saying there is none. */
+    private fun render(entry: VoxTranscriptStore.Entry): String =
+        if (!entry.analysed()) {
+            NOT_ANALYSED
+        } else {
+            lines(entry.action, entry.target, entry.constraints, entry.uncertainty, entry.tool, entry.why)
+        }
+
+    /** The reading of a bench run, which is never stored. */
+    private fun render(analysis: VoxAnalysis?): String =
+        if (analysis == null || analysis.isEmpty()) {
+            NOT_ANALYSED
+        } else {
+            lines(
+                analysis.action,
+                analysis.target,
+                analysis.constraints,
+                analysis.uncertainty,
+                analysis.tool,
+                analysis.why,
+            )
+        }
+
+    private fun lines(
+        action: String,
+        target: String,
+        constraints: List<String>,
+        uncertainty: List<String>,
+        tool: String,
+        why: String,
+    ): String {
+        val rows = mutableListOf<Pair<String, String>>()
+        rows.add("action" to action)
+        rows.add("target" to target)
+        rows.add("constraints" to constraints.joinToString("; "))
+        rows.add("uncertainty" to uncertainty.joinToString("; "))
+        // Only a named tool is worth a row: "none" is the answer to most requests and printing
+        // it on every one of them would bury the times it matters.
+        if (tool.isNotEmpty() && tool != "none") {
+            rows.add("Claude Code" to if (why.isEmpty()) tool else "$tool — $why")
+        }
+        val width = rows.maxOf { it.first.length }
+        return rows.joinToString(System.lineSeparator()) { (name, value) ->
+            name.padEnd(width) + "   " + value.ifEmpty { "—" }
+        }
     }
 
     private fun languageCombo(): ComboBox<String> {
@@ -265,5 +334,9 @@ internal class VoxWorkbenchPanel(private val project: Project) :
         const val DICTATION = "Dictation"
         const val PROMPT_HINT =
             "Task formalises speech into a request; Dictation only punctuates it and drops filler."
+        const val READING_HINT =
+            "What the backend's second pass made of the speech. Its fields quote the speech, so " +
+                "they stay in the spoken language whatever language the output came back in."
+        const val NOT_ANALYSED = "no reading was recorded for this transcript"
     }
 }

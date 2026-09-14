@@ -134,7 +134,8 @@ Anything already running as you could repoint it; never expose that port.
 The Vox tool window is both the history and a bench for working on prompts.
 
 **The store.** Every dictation is kept: the raw transcript, the message that was actually sent, the
-language, the microphone it came from and how many exchanges of context went with it. Only the
+language, the microphone it came from, how many exchanges of context went with it, and how the
+backend read the request. Only the
 finished message reaches the terminal, so this is where the transcript survives, and it is what
 makes a bad rewrite diagnosable without switching the backend's file tracing on. It persists across
 IDE restarts in the project's own IDE state (`vox-transcripts.xml`), newest 200 kept - deliberately
@@ -155,9 +156,17 @@ Three things are yours to choose:
 A replay is never stored. The bench answers "what would this prompt have done", and writing that
 back would corrupt the record of what actually happened.
 
+**How it was read.** Under the output sits what the backend's second pass made of the speech: the
+verb it heard and what it aimed it at, the constraints it kept, what it read as hedged, and - only
+when there is one - the Claude Code affordance it named. That last row is the one that changed the
+message: a named tool means a line like "Use a subagent for this." was appended to what you were
+about to send. The fields quote the speech, so they stay in the spoken language whatever language
+the output came back in. A transcript recorded before this existed, or a request the pass could not
+answer for, says so instead; it is never an error, and the message never depends on it.
+
 The prompts themselves stay on the backend. The plugin only chooses which one to apply, so there is
 no second copy of the prompt text, the glossary or the language blocks to keep in sync - edit
-`prompt.md` or `dictation.md`, restart the backend, and press Run again.
+`prompt.md`, `dictation.md` or `analysis.md`, restart the backend, and press Run again.
 
 ## Microphone
 

@@ -47,6 +47,7 @@ TRACE_KEYS = {
     "glossary",
     "prompt",
     "llm",
+    "analysis",
     "output",
     "timings_ms",
 }

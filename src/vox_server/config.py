@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     dictation_prompt_path: Path = Field(
         Path("dictation.md"), validation_alias="DICTATION_PROMPT_PATH"
     )
+    analysis_prompt_path: Path = Field(
+        Path("analysis.md"), validation_alias="ANALYSIS_PROMPT_PATH"
+    )
     glossary_path: Path = Field(Path("config/glossary.yaml"), validation_alias="GLOSSARY_PATH")
 
     max_audio_bytes: int = Field(25_000_000, validation_alias="MAX_AUDIO_BYTES")

@@ -29,11 +29,42 @@ class ProcessRequest(
     val clientVersion: String,
 )
 
+/**
+ * How the backend's second pass read one request.
+ *
+ * Reporting only: it never carries the message, and every field can legitimately be empty when
+ * the pass ran but found nothing to say. The whole object is null when the pass could not answer
+ * at all, which the backend treats as normal rather than as a failure, so the UI has to as well.
+ *
+ * [action] and [target] are the verb the model heard and what it aimed it at, [constraints] the
+ * limits it kept, [uncertainty] what it read as hedged. All of them quote the speech, so they are
+ * in the spoken language whatever language the message came back in. [tool] is one of "none",
+ * "subagent", "review" or "plan"; anything but "none" means a line was appended to the message.
+ */
+class VoxAnalysis(
+    val action: String,
+    val target: String,
+    val constraints: List<String>,
+    val uncertainty: List<String>,
+    val tool: String,
+    val why: String,
+) {
+    fun namesATool(): Boolean = tool.isNotEmpty() && tool != "none"
+
+    fun isEmpty(): Boolean =
+        action.isEmpty() &&
+            target.isEmpty() &&
+            constraints.isEmpty() &&
+            uncertainty.isEmpty() &&
+            !namesATool()
+}
+
 class ProcessResult(
     val requestId: String,
     val transcript: String,
     val output: String,
     val totalMs: Int,
+    val analysis: VoxAnalysis?,
 )
 
 /** Replaying one already-transcribed text through a prompt, with no microphone involved. */
@@ -45,7 +76,12 @@ class TransformRequest(
     val context: String?,
 )
 
-class TransformResult(val requestId: String, val output: String, val totalMs: Int)
+class TransformResult(
+    val requestId: String,
+    val output: String,
+    val totalMs: Int,
+    val analysis: VoxAnalysis?,
+)
 
 /** The backend's LLM connection. The API key is reported as set or not, never returned. */
 class LlmConfig(
@@ -110,6 +146,7 @@ class VoxClient(private val baseUrl: String, private val requestTimeout: Duratio
             transcript = body.stringOrEmpty("transcript"),
             output = body.stringOrEmpty("output"),
             totalMs = body.getAsJsonObject("timings_ms")?.get("total")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0,
+            analysis = parseAnalysis(body),
         )
     }
 
@@ -139,6 +176,7 @@ class VoxClient(private val baseUrl: String, private val requestTimeout: Duratio
             requestId = response.stringOrEmpty("request_id"),
             output = response.stringOrEmpty("output"),
             totalMs = response.getAsJsonObject("timings_ms")?.get("total")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0,
+            analysis = parseAnalysis(response),
         )
     }
 
@@ -273,6 +311,26 @@ class VoxClient(private val baseUrl: String, private val requestTimeout: Duratio
 
     private fun ByteArrayOutputStream.writeAscii(text: String) =
         write(text.toByteArray(StandardCharsets.US_ASCII))
+
+    private fun parseAnalysis(body: JsonObject): VoxAnalysis? {
+        val analysis = body.getAsJsonObject("analysis") ?: return null
+        val claudeCode = analysis.getAsJsonObject("claude_code")
+        return VoxAnalysis(
+            action = analysis.stringOrEmpty("action"),
+            target = analysis.stringOrEmpty("target"),
+            constraints = analysis.strings("constraints"),
+            uncertainty = analysis.strings("uncertainty"),
+            tool = claudeCode?.stringOrEmpty("tool").orEmpty(),
+            why = claudeCode?.stringOrEmpty("why").orEmpty(),
+        )
+    }
+
+    private fun JsonObject.strings(name: String): List<String> {
+        val array = get(name)?.takeIf { it.isJsonArray }?.asJsonArray ?: return emptyList()
+        return array.mapNotNull { element ->
+            element.takeIf { it.isJsonPrimitive }?.asString?.trim()?.takeIf { it.isNotEmpty() }
+        }
+    }
 
     private fun JsonObject.stringOrEmpty(name: String): String {
         val member = get(name) ?: return ""

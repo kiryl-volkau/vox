@@ -13,7 +13,7 @@ import math
 import struct
 import time
 import wave
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any, cast
 
@@ -24,7 +24,7 @@ from vox_server.api import register_exception_handlers, register_routes
 from vox_server.config import Settings, get_settings
 from vox_server.glossary import Glossary
 from vox_server.health import ServerState
-from vox_server.llm import OpenAICompatibleClient
+from vox_server.llm import LlmResponseError, OpenAICompatibleClient
 from vox_server.models import TranscriptionResult
 from vox_server.processor import Processor
 from vox_server.prompt import Prompt
@@ -130,7 +130,11 @@ class FakeLlm:
         delay_s: float = 0.0,
         raises: Exception | None = None,
         check_result: tuple[bool, str | None] = (True, None),
+        refuse_response_format: bool = False,
+        analysis_reply: str | None = None,
     ) -> None:
+        self.refuse_response_format = refuse_response_format
+        self.analysis_reply = analysis_reply
         self.reply = reply
         self.model = model
         self.base_url = base_url
@@ -140,6 +144,7 @@ class FakeLlm:
         self.check_timeouts: list[float | None] = []
         self.closed = False
         self.calls: list[tuple[str, str, float | None]] = []
+        self.response_formats: list[Mapping[str, Any] | None] = []
         self.api_key_set = False
         self.reconfigured: list[tuple[str | None, str | None, str | None]] = []
 
@@ -158,12 +163,24 @@ class FakeLlm:
         if api_key is not None:
             self.api_key_set = bool(api_key)
 
-    async def chat(self, system: str, user: str, *, temperature: float | None = None) -> str:
+    async def chat(
+        self,
+        system: str,
+        user: str,
+        *,
+        temperature: float | None = None,
+        response_format: Mapping[str, Any] | None = None,
+    ) -> str:
         self.calls.append((system, user, temperature))
+        self.response_formats.append(response_format)
         if self.delay_s:
             await asyncio.sleep(self.delay_s)
         if self.raises is not None:
             raise self.raises
+        if response_format is not None and self.refuse_response_format:
+            raise LlmResponseError("LLM returned HTTP 400")
+        if response_format is not None and self.analysis_reply is not None:
+            return self.analysis_reply
         return self.reply
 
     async def check(self, timeout_seconds: float | None = None) -> tuple[bool, str | None]:
@@ -219,11 +236,14 @@ def make_processor(
     glossary: Glossary | None = None,
     settings: Settings | None = None,
     trace_writer: TraceWriter | None = None,
+    analysis_prompt: Prompt | None = None,
 ) -> Processor:
     """Wire a Processor around fake collaborators; without a writer nothing is traced.
 
     ``dictation_prompt`` defaults to a distinguishable second prompt, so a test that does not
     care which one ran can still tell them apart in the recorded prompt text.
+    ``analysis_prompt`` defaults to None, which leaves the second pass off: a test that does
+    not ask for the reporting gets one LLM call, exactly as before it existed.
     """
     return Processor(
         cast(Transcriber, transcriber),
@@ -233,6 +253,7 @@ def make_processor(
         glossary if glossary is not None else Glossary(),
         settings if settings is not None else make_settings(),
         trace_writer,
+        analysis_prompt=analysis_prompt,
     )
 
 

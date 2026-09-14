@@ -8,6 +8,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from .analysis import Analysis
+
 logger = logging.getLogger(__name__)
 
 type Endpoint = Literal["process", "transcribe", "transform"]
@@ -80,6 +82,10 @@ class RequestTrace:
     llm_duration_ms: int = 0
     llm_raw_output: str = ""
     llm_cleaned_output: str = ""
+    analysis: Analysis | None = None
+    analysis_raw_output: str = ""
+    analysis_duration_ms: int = 0
+    analysis_schema_refused: bool = False
 
     output_text: str | None = None
     output_fell_back_to_transcript: bool = False
@@ -127,6 +133,7 @@ class RequestTrace:
             "glossary": self._glossary_section(),
             "prompt": self._prompt_section(),
             "llm": self._llm_section(),
+            "analysis": self._analysis_section(),
             "output": self._output_section(),
             "timings_ms": {
                 "transcription": self.transcription_ms,
@@ -223,6 +230,24 @@ class RequestTrace:
             "chars": len(text),
             "fell_back_to_transcript": self.output_fell_back_to_transcript,
             "text": text,
+        }
+
+    def _analysis_section(self) -> dict[str, Any] | None:
+        """The second pass: how the speech was read, and what that pass cost.
+
+        None when the pass never ran. A pass that ran and came back unreadable still reports,
+        with ``fields`` empty and ``raw_output`` holding whatever the model did say - which is
+        the only way to find out why it could not be read.
+        """
+        if not self.analysis_duration_ms and not self.analysis_raw_output:
+            return None
+        analysis = self.analysis
+        return {
+            "duration_ms": self.analysis_duration_ms,
+            "schema_refused": self.analysis_schema_refused,
+            "parsed": analysis is not None,
+            "raw_output": self.analysis_raw_output,
+            "fields": None if analysis is None else analysis.model_dump(mode="json"),
         }
 
 

@@ -47,6 +47,20 @@ class VoxTranscriptStore(private val project: Project) :
         var delivery: String = ""
         var error: String = ""
 
+        // How the backend's second pass read this request. All of it is optional: the pass can
+        // legitimately fail to answer, and every entry recorded before it existed has none.
+        var action: String = ""
+        var target: String = ""
+
+        @XCollection(style = XCollection.Style.v2)
+        var constraints: MutableList<String> = mutableListOf()
+
+        @XCollection(style = XCollection.Style.v2)
+        var uncertainty: MutableList<String> = mutableListOf()
+
+        var tool: String = ""
+        var why: String = ""
+
         /** The time this was dictated, or null when the stored stamp is unreadable. */
         fun instant(): Instant? = runCatching { Instant.parse(at) }.getOrNull()
 
@@ -61,6 +75,17 @@ class VoxTranscriptStore(private val project: Project) :
         }
 
         fun failed(): Boolean = error.isNotEmpty()
+
+        /** Whether the second pass said anything at all about this request. */
+        fun analysed(): Boolean =
+            action.isNotEmpty() ||
+                target.isNotEmpty() ||
+                constraints.isNotEmpty() ||
+                uncertainty.isNotEmpty() ||
+                namesATool()
+
+        /** Whether a Claude Code instruction was appended to the message that was delivered. */
+        fun namesATool(): Boolean = tool.isNotEmpty() && tool != "none"
     }
 
     class State {
@@ -92,6 +117,8 @@ class VoxTranscriptStore(private val project: Project) :
      *
      * ``transcript`` and ``output`` are stored as given; a blank transcript is kept rather than
      * dropped, because a request that recognised nothing is exactly the one worth looking at.
+     * ``analysis`` is whatever the backend's second pass reported, and null when it reported
+     * nothing - which is not an error and is how every entry from before it existed reads.
      */
     fun add(
         transcript: String,
@@ -101,6 +128,7 @@ class VoxTranscriptStore(private val project: Project) :
         contextExchanges: Int,
         delivery: String,
         error: String? = null,
+        analysis: VoxAnalysis? = null,
     ): Entry {
         val entry = Entry().apply {
             this.id = UUID.randomUUID().toString()
@@ -112,6 +140,12 @@ class VoxTranscriptStore(private val project: Project) :
             this.contextExchanges = contextExchanges
             this.delivery = delivery
             this.error = error.orEmpty()
+            this.action = analysis?.action.orEmpty()
+            this.target = analysis?.target.orEmpty()
+            this.constraints = analysis?.constraints.orEmpty().toMutableList()
+            this.uncertainty = analysis?.uncertainty.orEmpty().toMutableList()
+            this.tool = analysis?.tool.orEmpty()
+            this.why = analysis?.why.orEmpty()
         }
         synchronized(this) {
             state.entries.add(entry)
