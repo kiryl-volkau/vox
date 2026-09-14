@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from tests.conftest import make_settings
+from vox_server import runtime_config
 from vox_server.config import Settings
 from vox_server.health import ServerState
 from vox_server.llm import LlmResponseError, LlmTimeoutError, LlmUnavailableError
@@ -917,3 +920,99 @@ def test_dictate_runs_the_dictation_prompt_at_the_dictation_temperature(
     system, _user, temperature = llm.calls[0]
     assert system == "Ты диктофон."
     assert temperature == pytest.approx(0.0)
+
+
+def test_config_reports_the_live_llm_without_the_key(
+    ready_state: ServerState, app_factory: AppFactory
+) -> None:
+    """The key is reported as set or not; echoing it would hand it to anything on loopback."""
+    client = TestClient(app_factory(ready_state))
+
+    body = client.get("/v1/config").json()
+
+    assert body["model"] == "fake-llm"
+    assert body["api_key_set"] is False
+    assert body["overridden"] is False
+    assert body["ready"] is True
+    assert "api_key" not in body
+    assert "@" not in body["base_url"]
+
+
+def test_config_reconfigures_the_running_client(
+    ready_state: ServerState, app_factory: AppFactory, tmp_path: Path
+) -> None:
+    ready_state.settings = make_settings(state_dir=tmp_path)
+    llm = cast(Any, ready_state.llm)
+    client = TestClient(app_factory(ready_state))
+
+    body = client.put(
+        "/v1/config",
+        json={"base_url": "https://api.test/v1", "model": "gpt-x", "api_key": "sk-1"},
+    ).json()
+
+    assert llm.reconfigured == [("https://api.test/v1", "gpt-x", "sk-1")]
+    assert body["model"] == "gpt-x"
+    assert body["base_url"] == "https://api.test/v1"
+    assert body["api_key_set"] is True
+    assert body["overridden"] is True
+
+
+def test_config_persists_so_a_restart_keeps_it(
+    ready_state: ServerState, app_factory: AppFactory, tmp_path: Path
+) -> None:
+    ready_state.settings = make_settings(state_dir=tmp_path)
+    client = TestClient(app_factory(ready_state))
+
+    client.put("/v1/config", json={"model": "gpt-x"})
+
+    assert runtime_config.load(ready_state.settings).model == "gpt-x"
+
+
+def test_config_leaves_out_what_the_update_did_not_mention(
+    ready_state: ServerState, app_factory: AppFactory, tmp_path: Path
+) -> None:
+    ready_state.settings = make_settings(state_dir=tmp_path)
+    client = TestClient(app_factory(ready_state))
+
+    client.put("/v1/config", json={"base_url": "https://api.test/v1", "model": "gpt-x"})
+    body = client.put("/v1/config", json={"model": "gpt-y"}).json()
+
+    assert body["base_url"] == "https://api.test/v1"
+    assert body["model"] == "gpt-y"
+
+
+def test_config_reprobes_and_reports_an_unreachable_endpoint(
+    ready_state: ServerState, app_factory: AppFactory, tmp_path: Path
+) -> None:
+    """The point of probing on write: a wrong key is a dialog, not a timeout mid-dictation."""
+    ready_state.settings = make_settings(state_dir=tmp_path)
+    cast(Any, ready_state.llm).check_result = (False, "HTTP 401")
+    client = TestClient(app_factory(ready_state))
+
+    body = client.put("/v1/config", json={"api_key": "wrong"}).json()
+
+    assert body["ready"] is False
+    assert body["error"] == "HTTP 401"
+
+
+@pytest.mark.parametrize("url", ["", "   ", "ollama:11434/v1", "ftp://host/v1"])
+def test_config_rejects_a_base_url_that_is_not_http(
+    ready_state: ServerState, app_factory: AppFactory, url: str
+) -> None:
+    client = TestClient(app_factory(ready_state))
+
+    response = client.put("/v1/config", json={"base_url": url})
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_request"
+
+
+def test_config_is_refused_while_the_server_is_still_starting(
+    state_factory: StateFactory, app_factory: AppFactory
+) -> None:
+    client = TestClient(app_factory(state_factory(warming=True)))
+
+    response = client.put("/v1/config", json={"model": "gpt-x"})
+
+    assert response.status_code == 503
+    assert response.json()["error"] == "warming"

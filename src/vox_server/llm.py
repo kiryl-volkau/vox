@@ -243,6 +243,29 @@ class OpenAICompatibleClient:
     def base_url(self) -> str:
         return self._base_url
 
+    @property
+    def api_key_set(self) -> bool:
+        """Whether a bearer token will be sent. The key itself is never exposed."""
+        return bool(self._api_key)
+
+    def reconfigure(
+        self, *, base_url: str | None = None, model: str | None = None, api_key: str | None = None
+    ) -> None:
+        """Point this client at a different endpoint, model or key, in place.
+
+        Mutates rather than rebuilding because the Processor and the server state hold this
+        same object: replacing it would leave the pipeline talking to the old endpoint until
+        the next restart. ``None`` leaves a field alone; an empty ``api_key`` clears it, which
+        is what a local server that wants no bearer token needs. The underlying HTTP client is
+        kept, so in-flight requests are unaffected and no connection pool is leaked.
+        """
+        if base_url is not None:
+            self._base_url = base_url.rstrip("/")
+        if model is not None:
+            self._model = model
+        if api_key is not None:
+            self._api_key = api_key
+
     def _headers(self) -> dict[str, str]:
         if not self._api_key:
             return {}

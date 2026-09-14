@@ -11,13 +11,22 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import Response
 
-from . import __version__
+from . import __version__, runtime_config
 from .config import Settings, get_settings, redacted_base_url
-from .health import ServerState, build_health, gpu_health, uptime_seconds
+from .health import (
+    HEALTH_PROBE_TIMEOUT_S,
+    ServerState,
+    build_health,
+    gpu_health,
+    refresh_llm,
+    uptime_seconds,
+)
 from .llm import LlmResponseError, LlmTimeoutError, LlmUnavailableError
 from .models import (
     ErrorBody,
     HealthResponse,
+    LlmConfig,
+    LlmConfigUpdate,
     LlmHealth,
     ProcessResponse,
     SttHealth,
@@ -321,6 +330,77 @@ async def transform_text(request: Request, payload: TransformRequest) -> Transfo
         context=payload.context,
         language=payload.language,
     )
+
+
+def _llm_config(state: ServerState) -> LlmConfig:
+    llm = state.llm
+    effective = state.llm_override.applied_to(state.settings)
+    return LlmConfig(
+        base_url=redacted_base_url(llm.base_url if llm is not None else effective.base_url),
+        model=llm.model if llm is not None else effective.model,
+        api_key_set=llm.api_key_set if llm is not None else bool(effective.api_key),
+        warmup=effective.warmup,
+        overridden=bool(state.llm_override),
+        ready=state.llm_ready,
+        error=state.llm_error,
+    )
+
+
+@router.get("/v1/config")
+async def read_config(request: Request) -> LlmConfig:
+    """Report the LLM connection the server is using, with the API key reduced to a flag."""
+    return _llm_config(_server_state(request))
+
+
+@router.put("/v1/config")
+async def write_config(request: Request, payload: LlmConfigUpdate) -> LlmConfig:
+    """Point the running server at a different endpoint, model or key.
+
+    Applied immediately by reconfiguring the live client, then persisted to the state
+    directory so it survives a restart, then probed - the response carries ``ready`` and the
+    failure reason, so a caller learns straight away that a key is wrong instead of finding
+    out during the next dictation.
+
+    Deliberately unauthenticated, and safe only because the server binds to loopback: anything
+    already running as this user could rewrite the endpoint. Never expose this port.
+    """
+    state = _server_state(request)
+    llm = state.llm
+    if llm is None:
+        raise RequestRejectedError(503, "warming", "the server is still starting up")
+
+    update = runtime_config.LlmOverride(
+        base_url=_clean_url(payload.base_url),
+        model=payload.model.strip() if payload.model is not None else None,
+        api_key=payload.api_key,
+        warmup=payload.warmup,
+    )
+    state.llm_override = state.llm_override.merge(update)
+    effective = state.llm_override.applied_to(state.settings)
+    llm.reconfigure(
+        base_url=effective.base_url, model=effective.model, api_key=effective.api_key
+    )
+    if runtime_config.save(state.settings, state.llm_override) is None:
+        logger.warning("the LLM override was applied but could not be persisted")
+    logger.info(
+        "llm reconfigured to %s model=%s (key %s)",
+        redacted_base_url(effective.base_url),
+        effective.model,
+        "set" if effective.api_key else "unset",
+    )
+    await refresh_llm(state, HEALTH_PROBE_TIMEOUT_S)
+    return _llm_config(state)
+
+
+def _clean_url(value: str | None) -> str | None:
+    if value is None:
+        return None
+    url = value.strip().rstrip("/")
+    if not url:
+        raise RequestRejectedError(400, "invalid_request", "base_url must not be empty")
+    if not url.startswith(("http://", "https://")):
+        raise RequestRejectedError(400, "invalid_request", "base_url must start with http")
+    return url
 
 
 async def _internal_error_handler(request: Request, exc: Exception) -> Response:

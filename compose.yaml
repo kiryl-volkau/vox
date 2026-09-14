@@ -29,6 +29,9 @@ services:
       # off by default because it puts transcripts and prompts on disk. Read what lands there
       # with scripts/show-trace.ps1.
       - ./traces:/traces
+      # Settings changed from a client at runtime (PUT /v1/config), so they survive a
+      # restart. A volume rather than a bind mount: it holds the LLM API key.
+      - vox-state:/state
     deploy:
       resources:
         reservations:
@@ -86,3 +89,4 @@ volumes:
   hf-cache:
   ct2-cache:
   ollama-models:
+  vox-state:

@@ -11,7 +11,7 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI
 
-from . import __version__
+from . import __version__, runtime_config
 from .api import register_exception_handlers, register_routes
 from .config import Settings, get_settings, redacted_base_url, set_settings
 from .glossary import Glossary
@@ -114,13 +114,14 @@ async def _warm_up(
         logger.exception("stt failed to start; /health will report degraded")
 
     await refresh_llm(state)
+    # The live client, not the settings: a stored override may have repointed it at startup.
     logger.info(
         "llm %s at %s: %s",
-        settings.llm_model,
-        redacted_base_url(settings.llm_base_url),
+        llm.model,
+        redacted_base_url(llm.base_url),
         "ready" if state.llm_ready else f"unavailable ({state.llm_error})",
     )
-    if state.llm_ready and settings.llm_warmup:
+    if state.llm_ready and state.llm_override.applied_to(settings).warmup:
         await _warm_llm(llm)
     elif state.llm_ready:
         logger.info("llm warmup is off; the first request pays whatever the endpoint charges it")
@@ -145,22 +146,31 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     glossary = Glossary.load(settings.glossary_path)
     prompt = load_prompt(settings.prompt_path)
     dictation_prompt = load_prompt(settings.dictation_prompt_path)
+    override = runtime_config.load(settings)
+    effective = override.applied_to(settings)
     state = ServerState(
         settings=settings,
         started_at=time.monotonic(),
         prompt=prompt,
         dictation_prompt=dictation_prompt,
         glossary=glossary,
+        llm_override=override,
     )
     app.state.server_state = state
     logger.info("loaded %d glossary entries", len(glossary))
 
     transcriber = Transcriber(settings, hotwords=glossary.as_stt_prompt() or None)
     state.transcriber = transcriber
+    if effective.overridden:
+        logger.info(
+            "llm settings overridden at runtime: %s model=%s",
+            redacted_base_url(effective.base_url),
+            effective.model,
+        )
     llm = OpenAICompatibleClient(
-        base_url=settings.llm_base_url,
-        model=settings.llm_model,
-        api_key=settings.llm_api_key.get_secret_value(),
+        base_url=effective.base_url,
+        model=effective.model,
+        api_key=effective.api_key,
         timeout_seconds=settings.llm_timeout_seconds,
         temperature=settings.llm_temperature,
         max_tokens=settings.llm_max_tokens,

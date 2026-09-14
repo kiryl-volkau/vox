@@ -61,6 +61,7 @@ _SERVER_ENV_VARS = (
     "MAX_PROJECT_BYTES",
     "MAX_CONTEXT_BYTES",
     "DEFAULT_LANGUAGE",
+    "STATE_DIR",
     "VOX_TRACE_DIR",
     "VOX_TRACE_KEEP",
 )
@@ -139,6 +140,23 @@ class FakeLlm:
         self.check_timeouts: list[float | None] = []
         self.closed = False
         self.calls: list[tuple[str, str, float | None]] = []
+        self.api_key_set = False
+        self.reconfigured: list[tuple[str | None, str | None, str | None]] = []
+
+    def reconfigure(
+        self,
+        *,
+        base_url: str | None = None,
+        model: str | None = None,
+        api_key: str | None = None,
+    ) -> None:
+        self.reconfigured.append((base_url, model, api_key))
+        if base_url is not None:
+            self.base_url = base_url
+        if model is not None:
+            self.model = model
+        if api_key is not None:
+            self.api_key_set = bool(api_key)
 
     async def chat(self, system: str, user: str, *, temperature: float | None = None) -> str:
         self.calls.append((system, user, temperature))

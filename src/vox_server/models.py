@@ -77,6 +77,31 @@ class HealthResponse(BaseModel):
     gpu: GpuHealth
 
 
+class LlmConfig(BaseModel):
+    """The LLM connection as it stands. The API key is reported as set or not, never echoed."""
+
+    base_url: str
+    model: str
+    api_key_set: bool
+    warmup: bool
+    overridden: bool
+    ready: bool
+    error: str | None = None
+
+
+class LlmConfigUpdate(BaseModel):
+    """A partial change. An omitted field is left alone; an empty api_key clears it.
+
+    ``api_key`` is the one field where "" and ``None`` differ: a local server wants no bearer
+    token at all, and that has to be expressible without deleting the whole override.
+    """
+
+    base_url: str | None = None
+    model: str | None = None
+    api_key: str | None = None
+    warmup: bool | None = None
+
+
 class ErrorBody(BaseModel):
     error: str
     detail: str | None = None

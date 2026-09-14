@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 import ctranslate2
@@ -14,6 +14,7 @@ from .llm import OpenAICompatibleClient
 from .models import GpuHealth, HealthResponse, LlmHealth, SttHealth
 from .processor import Processor
 from .prompt import Prompt
+from .runtime_config import LlmOverride
 from .transcription import Transcriber
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,8 @@ class ServerState:
     glossary: Glossary | None = None
     processor: Processor | None = None
     stt_error: str | None = None
+    # The LLM settings a client changed at runtime; empty means .env is in force.
+    llm_override: LlmOverride = field(default_factory=LlmOverride)
     llm_ready: bool = False
     llm_error: str | None = None
     warming: bool = True

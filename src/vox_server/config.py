@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     log_level: str = Field("INFO", validation_alias="LOG_LEVEL")
     log_text: bool = Field(False, validation_alias="LOG_TEXT")
 
+    # Where settings changed at runtime are kept so they survive a container restart. A
+    # volume in the container; any writable directory when the server runs natively.
+    state_dir: Path = Field(Path("/state"), validation_alias="STATE_DIR")
+
     trace_dir: Path | None = Field(None, validation_alias="VOX_TRACE_DIR")
     trace_keep: int = Field(200, validation_alias="VOX_TRACE_KEEP")
 
