@@ -1,0 +1,58 @@
+name: Release
+
+# Tag a commit and the plugin zip appears on the Releases page, so nobody has to install a JDK
+# to try this. The tag is the source of truth for the version: it is checked against
+# plugin/gradle.properties rather than trusted, because a zip whose name disagrees with the
+# release it hangs under is the kind of thing nobody notices until someone reports a bug
+# against a version that was never built.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: build and attach the plugin zip
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # Building the plugin is plain JVM work; only running the IDE needs a JetBrains Runtime.
+      - name: Set up JDK
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Check the tag matches the plugin version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          declared=$(sed -n 's/^pluginVersion=//p' plugin/gradle.properties)
+          if [ "$tag" != "$declared" ]; then
+            echo "::error::tag $GITHUB_REF_NAME says $tag, plugin/gradle.properties says $declared"
+            exit 1
+          fi
+
+      # platformLocalPath is blank in the repository, so this downloads platformVersion from
+      # JetBrains rather than looking for an IDE that is not installed here.
+      - name: Build the plugin
+        working-directory: plugin
+        run: ./gradlew buildPlugin --no-daemon
+
+      - name: Attach the zip to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          zip=$(ls plugin/build/distributions/*.zip)
+          echo "built $zip"
+          gh release create "$GITHUB_REF_NAME" "$zip" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag

@@ -222,3 +222,54 @@ Sessions are read from
 file first, and only the tail is parsed. Tool calls, tool results, sidechains and hook output are
 skipped; only what a person typed and what the assistant wrote back is kept. Reading only - Vox
 never writes to those files. A project Claude Code has never run in simply sends no context.
+
+## Releasing
+
+Tagging is the whole process. `.github/workflows/release.yml` builds the zip on a clean runner
+and attaches it to the GitHub release, so nobody needs a JDK to install the plugin:
+
+```bash
+# bump pluginVersion in plugin/gradle.properties first - the workflow fails if the tag
+# disagrees with it, rather than publishing a zip whose name contradicts its release
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+## Publishing to JetBrains Marketplace
+
+Two things have to be true before the Marketplace will take it, and neither is automatic.
+
+**The first upload is always manual.** That is JetBrains' rule, not a limitation here: sign in at
+[plugins.jetbrains.com](https://plugins.jetbrains.com/), open your profile, *Add new plugin*, and
+upload a built zip. It then goes through moderation - expect a couple of working days. The plugin
+ID `dev.vox.idea` is what the Marketplace keys on and must not change afterwards.
+
+**Every upload has to be signed.** Generate a certificate once:
+
+```bash
+openssl genpkey -aes-256-cbc -algorithm RSA -out private_encrypted.pem -pkeyopt rsa_keygen_bits:4096
+openssl req -key private_encrypted.pem -new -x509 -days 365 -out chain.crt
+```
+
+Keep both out of the repository. The build needs no configuration for them: the IntelliJ Platform
+Gradle Plugin reads signing material and the publishing token from the environment by default.
+
+| Variable | What it holds |
+|---|---|
+| `PRIVATE_KEY` | contents of `private_encrypted.pem` |
+| `PRIVATE_KEY_PASSWORD` | the password you set on it |
+| `CERTIFICATE_CHAIN` | contents of `chain.crt` |
+| `ORG_GRADLE_PROJECT_intellijPlatformPublishingToken` | a permanent token from your Marketplace profile |
+
+With those set, later versions publish without touching the web UI:
+
+```bash
+cd plugin
+./gradlew signPlugin publishPlugin
+```
+
+To run that from CI, put the four values in the repository's Actions secrets and add the step to
+the release workflow. It is deliberately not there yet: a workflow that would push to a public
+marketplace on every tag is not something to switch on before the first manual submission has been
+accepted.
+

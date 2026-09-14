@@ -41,8 +41,12 @@ the log says:
 stt ready: model=turbo device=cuda compute_type=float16
 ```
 
-Then build and install the plugin - this is the only step that needs a JDK, and it must be a
-JetBrains Runtime 21+, not whatever `java` is on your PATH:
+Then install the plugin. Download `vox-idea-<version>.zip` from
+[Releases](https://github.com/kiryl-volkau/vox/releases), and in the IDE:
+**Settings | Plugins | ⚙ | Install Plugin from Disk…**, pick the zip, restart.
+
+To build it yourself instead - the only step that needs a JDK, and it must be a JetBrains
+Runtime 21+, not whatever `java` is on your PATH:
 
 ```powershell
 cd plugin
@@ -50,8 +54,7 @@ $env:JAVA_HOME = "C:\Users\<you>\.jdks\jbr-25.0.2"
 .\gradlew.bat buildPlugin --no-daemon
 ```
 
-In the IDE: **Settings | Plugins | ⚙ | Install Plugin from Disk…**, pick
-`plugin\build\distributions\vox-idea-0.1.0.zip`, restart.
+The zip lands in `plugin\build\distributions\`.
 
 ## Use it
 
