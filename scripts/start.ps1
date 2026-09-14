@@ -122,7 +122,7 @@ function Get-CompanionProcess {
     return @($processes | Where-Object { $_.Name -eq "vox.exe" -or $_.CommandLine -like "*vox_client*" })
 }
 
-# Minimal reader for the "hotkeys:" block of the client YAML. Printing the bindings is
+# Minimal reader for the "hotkeys:" block of the client YAML. Printing the combos is
 # cosmetic, so anything unparseable is skipped rather than reported.
 function Get-HotkeyBinding {
     param([string]$Path)
@@ -131,7 +131,6 @@ function Get-HotkeyBinding {
     }
     $lines = @()
     $inHotkeys = $false
-    $inBindings = $false
     foreach ($line in (Get-Content -LiteralPath $Path)) {
         if ($line -match '^\s*#') {
             continue
@@ -146,15 +145,7 @@ function Get-HotkeyBinding {
         if ($line -match '^\S') {
             break
         }
-        if ($line -match '^\s\s[A-Za-z0-9_-]+:\s*$') {
-            $inBindings = ($line -match '^\s\sbindings:\s*$')
-            continue
-        }
-        if ($line -match '^\s\scancel:\s*["'']?([^"''#]+?)["'']?\s*$') {
-            $lines += ("{0,-12} {1}" -f "cancel", $Matches[1])
-            continue
-        }
-        if ($inBindings -and $line -match '^\s\s\s\s([A-Za-z0-9_-]+):\s*["'']?([^"''#]+?)["'']?\s*$') {
+        if ($line -match '^\s\s(record|dictate|cancel):\s*["'']?([^"''#]+?)["'']?\s*$') {
             $lines += ("{0,-12} {1}" -f $Matches[1], $Matches[2])
         }
     }
@@ -338,10 +329,8 @@ if ($bindings.Count -gt 0) {
         Write-Info $binding
     }
 } else {
-    Write-Info "context      ctrl+alt+space"
-    Write-Info "dictation    ctrl+alt+d"
-    Write-Info "clean        ctrl+alt+c"
-    Write-Info "task         ctrl+alt+t"
+    Write-Info "record       ctrl+alt+space"
+    Write-Info "dictate      ctrl+alt+d"
     Write-Info "cancel       esc"
 }
 Write-Host ""

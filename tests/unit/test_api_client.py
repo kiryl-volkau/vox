@@ -27,7 +27,6 @@ membership - подписка пользователя, не участие в �
 
 PROCESS_BODY = {
     "request_id": "abc123def456",
-    "mode": "context",
     "transcript": "посмотри мембершип",
     "normalized_text": "Проверь membership.",
     "output": "VOICE TASK\nПроверь membership.",
@@ -51,13 +50,12 @@ def _json(payload: object, status: int = 200) -> Handler:
 def test_process_parses_the_backend_payload() -> None:
     client = _client(_json(PROCESS_BODY))
     try:
-        result = client.process(WAV, "context", audio_seconds=1.25)
+        result = client.process(WAV, audio_seconds=1.25)
     finally:
         client.close()
 
     assert isinstance(result, ProcessResult)
     assert result.request_id == "abc123def456"
-    assert result.mode == "context"
     assert result.output == "VOICE TASK\nПроверь membership."
     assert result.transcript == "посмотри мембершип"
     assert result.language == "ru"
@@ -73,7 +71,7 @@ def test_process_posts_the_audio_and_the_metadata() -> None:
 
     client = _client(handler)
     try:
-        client.process(WAV, "task", audio_seconds=2.5)
+        client.process(WAV, audio_seconds=2.5)
     finally:
         client.close()
 
@@ -83,13 +81,28 @@ def test_process_posts_the_audio_and_the_metadata() -> None:
     assert request.headers["content-type"].startswith("multipart/form-data")
 
     body = request.content
-    assert b'name="mode"' in body
-    assert b"task" in body
+    assert b'name="mode"' not in body
     assert b'name="audio"; filename="audio.wav"' in body
     assert WAV in body
     assert b'name="audio_seconds"' in body
     assert b"2.500" in body
     assert CLIENT_ID.encode() in body
+
+
+def test_dictation_is_posted_to_the_dictate_endpoint() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=PROCESS_BODY)
+
+    client = _client(handler)
+    try:
+        client.process(WAV, audio_seconds=2.5, dictation=True)
+    finally:
+        client.close()
+
+    assert str(seen[0].url) == "http://127.0.0.1:8765/v1/dictate"
 
 
 def test_project_context_is_posted_as_its_own_fields() -> None:
@@ -103,7 +116,6 @@ def test_project_context_is_posted_as_its_own_fields() -> None:
     try:
         client.process(
             WAV,
-            "context",
             audio_seconds=1.0,
             project=PROJECT_TEXT,
             project_name="jigward",
@@ -127,7 +139,7 @@ def test_a_request_without_a_project_omits_both_fields() -> None:
 
     client = _client(handler)
     try:
-        client.process(WAV, "context", audio_seconds=1.0)
+        client.process(WAV, audio_seconds=1.0)
     finally:
         client.close()
 
@@ -137,10 +149,10 @@ def test_a_request_without_a_project_omits_both_fields() -> None:
 
 
 def test_a_missing_output_field_is_a_malformed_reply() -> None:
-    client = _client(_json({"request_id": "x", "mode": "context"}))
+    client = _client(_json({"request_id": "x"}))
     try:
         with pytest.raises(ApiError) as excinfo:
-            client.process(WAV, "context", audio_seconds=1.0)
+            client.process(WAV, audio_seconds=1.0)
     finally:
         client.close()
 
@@ -154,7 +166,7 @@ def test_a_non_json_body_is_a_malformed_reply() -> None:
     client = _client(handler)
     try:
         with pytest.raises(ApiError) as excinfo:
-            client.process(WAV, "context", audio_seconds=1.0)
+            client.process(WAV, audio_seconds=1.0)
     finally:
         client.close()
 
@@ -165,7 +177,7 @@ def test_odd_timings_are_dropped_instead_of_crashing() -> None:
     payload = dict(PROCESS_BODY, timings_ms="not-a-mapping")
     client = _client(_json(payload))
     try:
-        result = client.process(WAV, "context", audio_seconds=1.0)
+        result = client.process(WAV, audio_seconds=1.0)
     finally:
         client.close()
 
@@ -179,7 +191,7 @@ def test_a_refused_connection_is_reported_as_unavailable() -> None:
     client = _client(handler)
     try:
         with pytest.raises(ApiUnavailableError) as excinfo:
-            client.process(WAV, "context", audio_seconds=1.0)
+            client.process(WAV, audio_seconds=1.0)
     finally:
         client.close()
 
@@ -194,7 +206,7 @@ def test_a_read_timeout_is_reported_as_a_timeout() -> None:
     client = _client(handler)
     try:
         with pytest.raises(ApiTimeoutError) as excinfo:
-            client.process(WAV, "context", audio_seconds=1.0)
+            client.process(WAV, audio_seconds=1.0)
     finally:
         client.close()
 
@@ -208,7 +220,7 @@ def test_a_connect_timeout_is_reported_as_unavailable() -> None:
     client = _client(handler)
     try:
         with pytest.raises(ApiUnavailableError):
-            client.process(WAV, "context", audio_seconds=1.0)
+            client.process(WAV, audio_seconds=1.0)
     finally:
         client.close()
 
@@ -220,7 +232,6 @@ def test_a_connect_timeout_is_reported_as_unavailable() -> None:
         (503, "stt_unavailable", "Whisper unavailable"),
         (503, "warming", "Backend warming up"),
         (422, "empty_transcript", "Nothing recognised"),
-        (400, "unknown_mode", "Unknown mode"),
         (413, "audio_too_large", "Recording too long"),
         (502, "empty_llm_output", "Model returned nothing"),
         (500, "internal_error", "Backend error"),
@@ -233,7 +244,7 @@ def test_a_backend_error_becomes_a_short_overlay_message(
     client = _client(_json({"error": code, "detail": "the long technical story"}, status=status))
     try:
         with pytest.raises(ApiError) as excinfo:
-            client.process(WAV, "context", audio_seconds=1.0)
+            client.process(WAV, audio_seconds=1.0)
     finally:
         client.close()
 
@@ -248,7 +259,7 @@ def test_an_llm_timeout_status_becomes_a_timeout_error() -> None:
     client = _client(_json({"error": "llm_timeout"}, status=504))
     try:
         with pytest.raises(ApiTimeoutError) as excinfo:
-            client.process(WAV, "context", audio_seconds=1.0)
+            client.process(WAV, audio_seconds=1.0)
     finally:
         client.close()
 
@@ -262,7 +273,7 @@ def test_an_error_status_without_a_json_body_still_maps() -> None:
     client = _client(handler)
     try:
         with pytest.raises(ApiError) as excinfo:
-            client.process(WAV, "context", audio_seconds=1.0)
+            client.process(WAV, audio_seconds=1.0)
     finally:
         client.close()
 
@@ -302,7 +313,12 @@ def test_health_reports_an_unreachable_backend() -> None:
 
 @pytest.mark.parametrize(
     ("code", "message"),
-    [("llm_timeout", "Model timeout"), ("", "Backend error"), ("nope", "Backend error")],
+    [
+        ("llm_timeout", "Model timeout"),
+        ("", "Backend error"),
+        ("nope", "Backend error"),
+        ("unknown_mode", "Backend error"),
+    ],
 )
 def test_message_for_code_never_shows_a_raw_slug(code: str, message: str) -> None:
     assert message_for_code(code) == message

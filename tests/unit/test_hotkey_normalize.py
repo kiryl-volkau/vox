@@ -122,7 +122,9 @@ def test_injected_events_are_ignored_so_our_own_paste_does_not_break_the_chord()
     Feeding that synthetic ctrl-up to the machine would clear a ctrl the user is still
     physically holding, and every later chord would then fail to match.
     """
-    machine = HotkeyStateMachine({"context": Hotkey.parse("ctrl+alt+space")}, Hotkey.parse("esc"))
+    machine = HotkeyStateMachine(
+        Hotkey.parse("ctrl+alt+space"), Hotkey.parse("ctrl+alt+d"), Hotkey.parse("esc")
+    )
     events: list[object] = []
     listener = HotkeyListener(machine, events.append)
 
@@ -142,6 +144,6 @@ def test_injected_events_are_ignored_so_our_own_paste_does_not_break_the_chord()
     listener._dispatch(_stub(name="space"), pressed=True)
 
     assert [e for e in events if isinstance(e, StartRecording)] == [
-        StartRecording("context"),
-        StartRecording("context"),
+        StartRecording(),
+        StartRecording(),
     ]

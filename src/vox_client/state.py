@@ -6,7 +6,6 @@ that come out, so the whole interaction model is testable without a keyboard.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -97,17 +96,26 @@ class Ignore:
 
 @dataclass(frozen=True, slots=True)
 class StartRecording:
-    mode: str
+    """A push-to-talk combo went down: start capturing.
+
+    ``dictation`` says which combo it was, and therefore which prompt the backend will run.
+    """
+
+    dictation: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class StopRecording:
-    mode: str
+    """The trigger key came back up: send what was captured."""
+
+    dictation: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class CancelRecording:
-    mode: str
+    """The cancel key was pressed mid-recording: throw the audio away."""
+
+    dictation: bool = False
 
 
 type Event = Ignore | StartRecording | StopRecording | CancelRecording
@@ -116,31 +124,29 @@ type Event = Ignore | StartRecording | StopRecording | CancelRecording
 class HotkeyStateMachine:
     """Turns key presses into recording events for one recording at a time.
 
-    Recording starts when a binding's trigger key goes down while exactly that binding's
-    modifiers are held, and stops when that same trigger key is released; modifiers may be
-    released first, in any order. While recording or processing, every other binding is
-    inert, so two recordings can never overlap. The cancel key aborts an in-flight recording
-    and is ignored otherwise; after a cancel the trigger key has to be released before it can
-    start anything again.
+    Two combos start a recording: ``record`` runs the task prompt, ``dictate`` the dictation
+    one, and the resulting events carry that choice. Recording starts when a combo's trigger
+    key goes down while exactly that combo's modifiers are held, and stops when that same
+    trigger key is released; modifiers may be released first, in any order. While recording
+    or processing both triggers are inert, so two recordings can never overlap. The cancel
+    key aborts an in-flight recording and is ignored otherwise; after a cancel the trigger
+    key has to be released before it can start anything again.
     """
 
-    def __init__(self, bindings: Mapping[str, Hotkey], cancel: Hotkey | None) -> None:
-        self._bindings = dict(bindings)
+    def __init__(self, record: Hotkey, dictate: Hotkey | None, cancel: Hotkey | None) -> None:
+        self._record = record
+        self._dictate = dictate
         self._cancel = cancel
         self._held: set[str] = set()
         self._pressed: set[str] = set()
         self._blocked: set[str] = set()
         self._phase = Phase.IDLE
-        self._active_mode: str | None = None
         self._active_key: str | None = None
+        self._active_dictation = False
 
     @property
     def phase(self) -> Phase:
         return self._phase
-
-    @property
-    def active_mode(self) -> str | None:
-        return self._active_mode
 
     @property
     def held(self) -> frozenset[str]:
@@ -159,13 +165,13 @@ class HotkeyStateMachine:
         self._pressed.add(name)
 
         if self._phase is Phase.RECORDING and self._matches_cancel(name):
-            mode = self._active_mode or ""
+            dictation = self._active_dictation
             if self._active_key is not None:
                 # Cancelling leaves the trigger key down: without this its auto-repeat would
                 # immediately start the recording the user just threw away.
                 self._blocked.add(self._active_key)
             self._clear_active()
-            return CancelRecording(mode)
+            return CancelRecording(dictation)
 
         if self._phase is not Phase.IDLE or name in self._blocked:
             # Block a trigger pressed mid-flight, exactly as cancelling does. Otherwise the
@@ -175,12 +181,12 @@ class HotkeyStateMachine:
                 self._blocked.add(name)
             return Ignore()
 
-        for mode, hotkey in self._bindings.items():
-            if hotkey.key == name and hotkey.mods == self._held:
+        for hotkey, dictation in ((self._record, False), (self._dictate, True)):
+            if hotkey is not None and hotkey.key == name and hotkey.mods == self._held:
                 self._phase = Phase.RECORDING
-                self._active_mode = mode
                 self._active_key = name
-                return StartRecording(mode)
+                self._active_dictation = dictation
+                return StartRecording(dictation)
         return Ignore()
 
     def key_up(self, key: str) -> Ignore | StopRecording:
@@ -196,8 +202,7 @@ class HotkeyStateMachine:
             return Ignore()
         self._pressed.discard(name)
         if self._phase is Phase.RECORDING and name == self._active_key:
-            mode = self._active_mode or ""
-            return StopRecording(mode)
+            return StopRecording(self._active_dictation)
         return Ignore()
 
     def processing_started(self) -> None:
@@ -217,7 +222,9 @@ class HotkeyStateMachine:
         self._clear_active()
 
     def _is_trigger(self, name: str) -> bool:
-        return any(hotkey.key == name for hotkey in self._bindings.values())
+        return name == self._record.key or (
+            self._dictate is not None and name == self._dictate.key
+        )
 
     def _matches_cancel(self, name: str) -> bool:
         if self._cancel is None or name != self._cancel.key:
@@ -227,5 +234,5 @@ class HotkeyStateMachine:
 
     def _clear_active(self) -> None:
         self._phase = Phase.IDLE
-        self._active_mode = None
         self._active_key = None
+        self._active_dictation = False

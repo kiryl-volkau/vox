@@ -7,13 +7,6 @@ import yaml
 
 from vox_client.config import ConfigError, default_config, load_config
 
-EXPECTED_BINDINGS = {
-    "context": "ctrl+alt+space",
-    "dictation": "ctrl+alt+d",
-    "clean": "ctrl+alt+c",
-    "task": "ctrl+alt+t",
-}
-
 
 def _write(tmp_path: Path, data: object) -> Path:
     path = tmp_path / "client.yaml"
@@ -37,7 +30,8 @@ def test_the_defaults_match_the_documented_contract() -> None:
     assert config.audio.max_seconds == 120.0
     assert config.audio.sample_rate is None
     assert config.audio.channels == 1
-    assert config.hotkeys.bindings == EXPECTED_BINDINGS
+    assert config.hotkeys.record == "ctrl+alt+space"
+    assert config.hotkeys.dictate == "ctrl+alt+d"
     assert config.hotkeys.cancel == "esc"
     assert config.paste.enabled is True
     assert config.paste.shortcut == "ctrl+v"
@@ -77,7 +71,7 @@ def test_a_partial_file_only_overrides_what_it_names(tmp_path: Path) -> None:
     assert config.paste.auto_submit is True
     assert config.paste.shortcut == "ctrl+v"
     assert config.audio == default_config().audio
-    assert config.hotkeys.bindings == EXPECTED_BINDINGS
+    assert config.hotkeys == default_config().hotkeys
 
 
 def test_unknown_top_level_keys_are_ignored(tmp_path: Path) -> None:
@@ -89,16 +83,25 @@ def test_unknown_top_level_keys_are_ignored(tmp_path: Path) -> None:
     assert config.server == default_config().server
 
 
-def test_custom_bindings_replace_the_defaults(tmp_path: Path) -> None:
+def test_a_custom_record_hotkey_replaces_the_default(tmp_path: Path) -> None:
     path = _write(
         tmp_path,
-        {"hotkeys": {"bindings": {"context": "ctrl+shift+space"}, "cancel": "escape"}},
+        {"hotkeys": {"record": "ctrl+shift+space", "cancel": "escape"}},
     )
 
     config = load_config(path)
 
-    assert config.hotkeys.bindings == {"context": "ctrl+shift+space"}
+    assert config.hotkeys.record == "ctrl+shift+space"
     assert config.hotkeys.cancel == "escape"
+
+
+def test_a_custom_dictate_hotkey_replaces_the_default(tmp_path: Path) -> None:
+    path = _write(tmp_path, {"hotkeys": {"dictate": "ctrl+shift+d"}})
+
+    config = load_config(path)
+
+    assert config.hotkeys.dictate == "ctrl+shift+d"
+    assert config.hotkeys.record == "ctrl+alt+space"
 
 
 def test_the_device_name_and_sample_rate_round_trip(tmp_path: Path) -> None:
@@ -152,11 +155,12 @@ def test_the_project_block_round_trips(tmp_path: Path) -> None:
         ({"audio": {"channels": 3}}, "audio.channels"),
         ({"audio": {"input_device": "   "}}, "audio.input_device"),
         ({"audio": {"input_device": True}}, "audio.input_device"),
-        ({"hotkeys": {"bindings": {}}}, "hotkeys.bindings"),
-        ({"hotkeys": {"bindings": []}}, "hotkeys.bindings"),
-        ({"hotkeys": {"bindings": {"context": "ctrl+alt"}}}, "hotkeys.bindings.context"),
-        ({"hotkeys": {"bindings": {"context": "ctrl+a+b"}}}, "hotkeys.bindings.context"),
-        ({"hotkeys": {"bindings": {"context": 42}}}, "hotkeys.bindings.context"),
+        ({"hotkeys": {"record": "ctrl+alt"}}, "hotkeys.record"),
+        ({"hotkeys": {"record": "ctrl+a+b"}}, "hotkeys.record"),
+        ({"hotkeys": {"record": 42}}, "hotkeys.record"),
+        ({"hotkeys": {"dictate": "ctrl+alt"}}, "hotkeys.dictate"),
+        ({"hotkeys": {"dictate": "ctrl+a+b"}}, "hotkeys.dictate"),
+        ({"hotkeys": {"dictate": 42}}, "hotkeys.dictate"),
         ({"hotkeys": {"cancel": "ctrl+"}}, "hotkeys.cancel"),
         ({"paste": {"shortcut": "ctrl"}}, "paste.shortcut"),
         ({"paste": {"restore_delay_ms": -1}}, "paste.restore_delay_ms"),
@@ -203,7 +207,8 @@ def test_invalid_yaml_is_rejected(tmp_path: Path) -> None:
 def test_the_example_config_shipped_with_the_repository_loads(repo_root: Path) -> None:
     config = load_config(repo_root / "config" / "client.example.yaml")
 
-    assert config.hotkeys.bindings == EXPECTED_BINDINGS
+    assert config.hotkeys.record == "ctrl+alt+space"
+    assert config.hotkeys.dictate == "ctrl+alt+d"
     assert config.hotkeys.cancel == "esc"
     assert config.paste.auto_submit is False
     assert config.paste.shortcut == "ctrl+v"
@@ -218,12 +223,43 @@ def test_the_example_config_shipped_with_the_repository_loads(repo_root: Path) -
 def test_a_trigger_key_the_listener_never_reports_is_refused(tmp_path: Path, combo: str) -> None:
     """Hotkey.parse only checks the shape, so an unknown key used to load and never fire."""
     path = tmp_path / "client.yaml"
-    path.write_text(f"hotkeys:\n  bindings:\n    context: {combo}\n", encoding="utf-8")
+    path.write_text(f"hotkeys:\n  record: {combo}\n", encoding="utf-8")
 
     with pytest.raises(ConfigError) as excinfo:
         load_config(path)
 
-    assert "hotkeys.bindings.context" in str(excinfo.value)
+    assert "hotkeys.record" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("combo", ["ctrl+alt+pause", "ctrl+alt+ё", "ctrl+alt+scrolllock"])
+def test_a_dictate_trigger_key_the_listener_never_reports_is_refused(
+    tmp_path: Path, combo: str
+) -> None:
+    path = tmp_path / "client.yaml"
+    path.write_text(f"hotkeys:\n  dictate: {combo}\n", encoding="utf-8")
+
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(path)
+
+    assert "hotkeys.dictate" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("record", "dictate"),
+    [("ctrl+alt+space", "ctrl+alt+space"), ("ctrl+alt+space", "ALT+CTRL+SPACE")],
+)
+def test_a_dictate_hotkey_equal_to_record_is_rejected(
+    tmp_path: Path, record: str, dictate: str
+) -> None:
+    """Compared after parsing, so a differently-written but equivalent combo is caught too."""
+    path = _write(tmp_path, {"hotkeys": {"record": record, "dictate": dictate}})
+
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(path)
+
+    assert str(excinfo.value) == (
+        "hotkeys.dictate: must differ from hotkeys.record, or it never fires"
+    )
 
 
 @pytest.mark.parametrize("combo", ["ctrl+alt+space", "ctrl+space", "ctrl+alt+f13", "win+alt+0"])
@@ -231,9 +267,9 @@ def test_supported_trigger_keys_are_accepted(tmp_path: Path, combo: str) -> None
     # ctrl+space is a deliberate allowance: it collides with IntelliJ completion, so it is not
     # the default, but the user may still choose it.
     path = tmp_path / "client.yaml"
-    path.write_text(f"hotkeys:\n  bindings:\n    context: {combo}\n", encoding="utf-8")
+    path.write_text(f"hotkeys:\n  record: {combo}\n", encoding="utf-8")
 
-    assert load_config(path).hotkeys.bindings["context"] == combo
+    assert load_config(path).hotkeys.record == combo
 
 
 @pytest.mark.parametrize(

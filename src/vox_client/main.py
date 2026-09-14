@@ -69,16 +69,18 @@ class VoiceCodeApp:
     def __init__(self, config: ClientConfig, *, config_path: Path) -> None:
         self._config = config
         self._config_path = config_path
-        bindings = {name: Hotkey.parse(spec) for name, spec in config.hotkeys.bindings.items()}
+        record = Hotkey.parse(config.hotkeys.record)
+        dictate = Hotkey.parse(config.hotkeys.dictate) if config.hotkeys.dictate else None
         cancel = Hotkey.parse(config.hotkeys.cancel) if config.hotkeys.cancel else None
-        self._machine = HotkeyStateMachine(bindings, cancel)
+        self._machine = HotkeyStateMachine(record, dictate, cancel)
         self._recorder = Recorder(config.audio)
         self._client = VoiceCodeClient(config.server)
         self._overlay = Overlay(config.overlay)
         self._listener = HotkeyListener(self._machine, self._on_event)
         self._stop_event = threading.Event()
         self._tray: Any = None
-        self._recording_mode: str | None = None
+        self._recording = False
+        self._recording_dictation = False
         self._recording_started = 0.0
         self._target_hwnd: int | None = None
         self._project = _ProjectContext()
@@ -91,8 +93,8 @@ class VoiceCodeApp:
         self._listener.start()
         self._start_tray()
         threading.Thread(target=self._probe_backend, name="vox-health", daemon=True).start()
-        logger.info("listening for %s", self._bindings_summary())
-        self._overlay.show(f"vox ready - {self._bindings_summary()}", style="info")
+        logger.info("listening for %s", self._hotkey_summary())
+        self._overlay.show(f"vox ready - {self._hotkey_summary()}", style="info")
         self._overlay.hide()
         try:
             if self._overlay.enabled:
@@ -108,18 +110,18 @@ class VoiceCodeApp:
     def _on_event(self, event: object) -> None:
         try:
             if isinstance(event, StartRecording):
-                self._start_recording(event.mode)
+                self._start_recording(event.dictation)
             elif isinstance(event, StopRecording):
-                self._stop_recording(event.mode)
+                self._stop_recording(event.dictation)
             elif isinstance(event, CancelRecording):
-                self._cancel(event.mode)
+                self._cancel(event.dictation)
         except Exception:
             logger.exception("hotkey event handling failed")
             self._machine.reset()
-            self._recording_mode = None
+            self._recording = False
             self._fail("Internal error")
 
-    def _start_recording(self, mode: str) -> None:
+    def _start_recording(self, dictation: bool) -> None:
         self._target_hwnd = foreground_window()
         try:
             self._recorder.start()
@@ -128,14 +130,15 @@ class VoiceCodeApp:
             self._machine.reset()
             self._fail("Microphone unavailable")
             return
-        self._recording_mode = mode
+        self._recording = True
+        self._recording_dictation = dictation
         self._recording_started = time.monotonic()
         self._project = self._resolve_project(self._target_hwnd)
-        self._overlay.show(_recording_text(mode, 0.0), style="recording")
+        self._overlay.show(_recording_text(dictation, 0.0), style="recording")
         self._overlay.after(_TICK_MS, self._tick)
 
-    def _stop_recording(self, mode: str) -> None:
-        self._recording_mode = None
+    def _stop_recording(self, dictation: bool) -> None:
+        self._recording = False
         released_at = time.perf_counter()
         self._machine.processing_started()
         try:
@@ -146,31 +149,39 @@ class VoiceCodeApp:
             self._machine.processing_finished()
             return
         if not wav or seconds <= 0.0:
-            logger.info("nothing captured for mode %s", mode)
+            logger.info("nothing captured")
             self._fail("No audio captured")
             self._machine.processing_finished()
             return
         self._job += 1
-        _log_provenance(mode, self._project, self._target_hwnd)
+        _log_provenance(dictation, self._project, self._target_hwnd)
         self._overlay.show("Transcribing...", style="info")
         threading.Thread(
             target=self._worker,
-            args=(wav, mode, seconds, self._job, self._target_hwnd, released_at, self._project),
+            args=(
+                wav,
+                dictation,
+                seconds,
+                self._job,
+                self._target_hwnd,
+                released_at,
+                self._project,
+            ),
             name="vox-request",
             daemon=True,
         ).start()
 
-    def _cancel(self, mode: str) -> None:
-        self._recording_mode = None
+    def _cancel(self, dictation: bool) -> None:
+        self._recording = False
         self._recorder.cancel()
-        logger.info("cancelled recording for mode %s", mode)
+        logger.info("cancelled the %s recording", "dictation" if dictation else "task")
         self._overlay.show("Cancelled", style="info")
         self._overlay.hide()
 
     def _worker(
         self,
         wav: bytes,
-        mode: str,
+        dictation: bool,
         seconds: float,
         job: int,
         target_hwnd: int | None,
@@ -178,14 +189,13 @@ class VoiceCodeApp:
         project: _ProjectContext,
     ) -> None:
         try:
-            result = self._request(wav, mode, seconds, job, project)
+            result = self._request(wav, dictation, seconds, job, project)
             if result is None:
                 return
             answered_at = time.perf_counter()
             logger.info(
-                "request %s mode=%s audio=%.1fs project=%s server_ms=%s chars=%d",
+                "request %s audio=%.1fs project=%s server_ms=%s chars=%d",
                 result.request_id,
-                result.mode,
                 seconds,
                 project.name or "-",
                 result.server_ms,
@@ -214,7 +224,7 @@ class VoiceCodeApp:
             self._machine.processing_finished()
 
     def _request(
-        self, wav: bytes, mode: str, seconds: float, job: int, project: _ProjectContext
+        self, wav: bytes, dictation: bool, seconds: float, job: int, project: _ProjectContext
     ) -> ProcessResult | None:
         self._pending_job = job
         hint = threading.Timer(_FORMATTING_HINT_S, self._hint_formatting, args=(job,))
@@ -225,15 +235,15 @@ class VoiceCodeApp:
                 try:
                     return self._client.process(
                         wav,
-                        mode,
                         audio_seconds=seconds,
+                        dictation=dictation,
                         project=project.text,
                         project_name=project.name,
                     )
                 except ApiUnavailableError:
                     logger.warning("backend unreachable (attempt %d)", attempt)
                     if attempt == 2:
-                        logger.warning("discarding %.1fs of audio for mode %s", seconds, mode)
+                        logger.warning("discarding %.1fs of audio", seconds)
                         self._fail("Service unavailable")
                         return None
                     self._overlay.show("Service unavailable", style="error")
@@ -320,11 +330,12 @@ class VoiceCodeApp:
         self._overlay.hide()
 
     def _tick(self) -> None:
-        mode = self._recording_mode
-        if mode is None:
+        if not self._recording:
             return
         elapsed = time.monotonic() - self._recording_started
-        self._overlay.show(_recording_text(mode, elapsed), style="recording")
+        self._overlay.show(
+            _recording_text(self._recording_dictation, elapsed), style="recording"
+        )
         self._overlay.after(_TICK_MS, self._tick)
 
     def _hint_formatting(self, job: int) -> None:
@@ -337,6 +348,9 @@ class VoiceCodeApp:
         deadline = time.monotonic() + _MODIFIER_RELEASE_TIMEOUT_S
         while self._machine.held and time.monotonic() < deadline:
             time.sleep(0.02)
+
+    def _hotkey_summary(self) -> str:
+        return f"{self._config.hotkeys.record} task, {self._config.hotkeys.dictate} dictation"
 
     def _probe_backend(self) -> None:
         try:
@@ -351,11 +365,6 @@ class VoiceCodeApp:
         if status != "ready":
             self._overlay.show("Backend warming up", style="info")
             self._overlay.hide()
-
-    def _bindings_summary(self) -> str:
-        return ", ".join(
-            f"{spec} {name}" for name, spec in sorted(self._config.hotkeys.bindings.items())
-        )
 
     def _start_tray(self) -> None:
         try:
@@ -428,16 +437,17 @@ class VoiceCodeApp:
         self._client.close()
 
 
-def _recording_text(mode: str, elapsed_s: float) -> str:
+def _recording_text(dictation: bool, elapsed_s: float) -> str:
     total = max(0, int(elapsed_s))
-    return f"{mode.upper()} - Recording {total // 60:02d}:{total % 60:02d}"
+    label = "Dictating" if dictation else "Recording"
+    return f"{label} {total // 60:02d}:{total % 60:02d}"
 
 
-def _log_provenance(mode: str, project: _ProjectContext, hwnd: int | None) -> None:
+def _log_provenance(dictation: bool, project: _ProjectContext, hwnd: int | None) -> None:
     logger.info(
-        "sending mode=%s project=%s project_file=%s project_bytes=%d truncated=%s "
+        "sending prompt=%s project=%s project_file=%s project_bytes=%d truncated=%s "
         "project_status=%s window=%s",
-        mode,
+        "dictation" if dictation else "task",
         project.name or "-",
         project.path or "-",
         project.sent_bytes,

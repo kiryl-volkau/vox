@@ -16,7 +16,6 @@ from vox_client.api_client import ApiError, VoiceCodeClient
 from vox_client.config import ServerConfig
 
 BASE_URL = os.environ.get("VOICE_CODE_E2E_URL", "http://127.0.0.1:8765")
-MODE = os.environ.get("VOICE_CODE_E2E_MODE", "dictation")
 
 pytestmark = [
     pytest.mark.integration,
@@ -47,13 +46,6 @@ def test_health_reports_a_ready_backend() -> None:
     assert "@" not in body["llm"]["base_url"]
 
 
-def test_modes_are_served() -> None:
-    body = httpx.get(f"{BASE_URL}/v1/modes", timeout=10.0).json()
-    names = {mode["name"] for mode in body["modes"]}
-
-    assert {"clean", "context", "dictation", "task"} <= names
-
-
 def test_a_generated_wav_survives_the_whole_pipeline(
     live_client: VoiceCodeClient, wav_factory: Callable[..., bytes]
 ) -> None:
@@ -67,21 +59,28 @@ def test_a_generated_wav_survives_the_whole_pipeline(
     wav = wav_factory(seconds=2.0, sample_rate=16000, frequency=180.0, amplitude=0.2)
 
     try:
-        result = live_client.process(wav, MODE, audio_seconds=2.0)
+        result = live_client.process(wav, audio_seconds=2.0)
     except ApiError as exc:
         assert exc.code == "empty_transcript", f"unexpected backend failure: {exc.code}"
         return
 
     assert result.request_id
-    assert result.mode == MODE
     assert isinstance(result.output, str)
     assert result.server_ms.get("total", 0) > 0
 
 
-def test_an_unknown_mode_is_refused(live_client: VoiceCodeClient) -> None:
-    wav_header = b"RIFF----WAVEfmt "
+def test_a_generated_wav_survives_the_dictation_pipeline(
+    live_client: VoiceCodeClient, wav_factory: Callable[..., bytes]
+) -> None:
+    """Same round trip as above, but through /v1/dictate instead of /v1/process."""
+    wav = wav_factory(seconds=2.0, sample_rate=16000, frequency=180.0, amplitude=0.2)
 
-    with pytest.raises(ApiError) as excinfo:
-        live_client.process(wav_header, "definitely-not-a-mode", audio_seconds=0.1)
+    try:
+        result = live_client.process(wav, audio_seconds=2.0, dictation=True)
+    except ApiError as exc:
+        assert exc.code == "empty_transcript", f"unexpected backend failure: {exc.code}"
+        return
 
-    assert excinfo.value.code in {"unknown_mode", "empty_transcript", "stt_unavailable"}
+    assert result.request_id
+    assert isinstance(result.output, str)
+    assert result.server_ms.get("total", 0) > 0

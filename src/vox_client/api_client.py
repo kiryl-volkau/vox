@@ -18,7 +18,6 @@ CLIENT_VERSION = __version__
 GENERIC_ERROR_MESSAGE = "Backend error"
 
 ERROR_MESSAGES: dict[str, str] = {
-    "unknown_mode": "Unknown mode",
     "empty_audio": "No audio captured",
     "audio_too_large": "Recording too long",
     "empty_transcript": "Nothing recognised",
@@ -29,6 +28,9 @@ ERROR_MESSAGES: dict[str, str] = {
     "llm_error": "Model error",
     "warming": "Backend warming up",
     "internal_error": "Backend error",
+    # The companion only ever calls routes this backend is supposed to have, so a 404 means
+    # the container predates the client - most likely /v1/dictate on a backend not rebuilt yet.
+    "not_found": "Backend is out of date",
 }
 
 
@@ -73,7 +75,6 @@ class ProcessResult:
     """
 
     request_id: str
-    mode: str
     output: str
     transcript: str
     language: str
@@ -96,23 +97,24 @@ class VoiceCodeClient:
     def process(
         self,
         wav: bytes,
-        mode: str,
         *,
         audio_seconds: float,
+        dictation: bool = False,
         project: str | None = None,
         project_name: str | None = None,
     ) -> ProcessResult:
-        """Upload ``wav`` for transcription and mode processing.
+        """Upload ``wav`` for transcription and one of the two prompts.
 
-        ``audio_seconds`` is the captured duration and is sent as request metadata only.
-        ``project`` is the text of the caller's ``.vox.md``, already truncated to what the
-        caller is willing to send, and ``project_name`` names it for the backend's logs;
-        each is left out of the request entirely when None.
+        ``dictation`` sends it to /v1/dictate, which only punctuates what was said, instead
+        of /v1/process, which formalises it into a task. ``audio_seconds`` is the captured
+        duration and is sent as request metadata only. ``project`` is the text of the
+        caller's ``.vox.md``, already truncated to what the caller is willing to send, and
+        ``project_name`` names it for the backend's logs; each is left out of the request
+        entirely when None.
         Raises :class:`ApiUnavailableError` when the backend is down,
         :class:`ApiTimeoutError` when it is too slow, :class:`ApiError` otherwise.
         """
         data = {
-            "mode": mode,
             "audio_seconds": f"{audio_seconds:.3f}",
             "client_id": CLIENT_ID,
             "client_version": CLIENT_VERSION,
@@ -123,7 +125,7 @@ class VoiceCodeClient:
             data["project_name"] = project_name
         response = self._call(
             "POST",
-            "/v1/process",
+            "/v1/dictate" if dictation else "/v1/process",
             files={"audio": ("audio.wav", wav, "audio/wav")},
             data=data,
         )
@@ -133,7 +135,6 @@ class VoiceCodeClient:
             raise ApiError("Malformed backend reply", code="bad_response", status=200)
         return ProcessResult(
             request_id=_text(payload, "request_id"),
-            mode=_text(payload, "mode") or mode,
             output=output,
             transcript=_text(payload, "transcript"),
             language=_text(payload, "language"),

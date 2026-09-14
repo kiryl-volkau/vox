@@ -13,17 +13,17 @@ from vox_client.state import (
     canonical_key,
 )
 
-BINDINGS = {
-    "context": "ctrl+alt+space",
-    "dictation": "ctrl+alt+d",
-    "clean": "ctrl+alt+c",
-    "task": "ctrl+alt+t",
-}
 
-
-def _machine(cancel: str | None = "esc") -> HotkeyStateMachine:
-    bindings = {mode: Hotkey.parse(spec) for mode, spec in BINDINGS.items()}
-    return HotkeyStateMachine(bindings, Hotkey.parse(cancel) if cancel else None)
+def _machine(
+    record: str = "ctrl+alt+space",
+    dictate: str | None = "ctrl+alt+d",
+    cancel: str | None = "esc",
+) -> HotkeyStateMachine:
+    return HotkeyStateMachine(
+        Hotkey.parse(record),
+        Hotkey.parse(dictate) if dictate else None,
+        Hotkey.parse(cancel) if cancel else None,
+    )
 
 
 def _start(machine: HotkeyStateMachine, trigger: str = "space") -> object:
@@ -107,16 +107,17 @@ def test_the_full_chord_starts_recording() -> None:
 
     event = _start(machine)
 
-    assert event == StartRecording("context")
+    assert event == StartRecording()
     assert machine.phase is Phase.RECORDING
-    assert machine.active_mode == "context"
 
 
-def test_each_binding_starts_its_own_mode() -> None:
-    for trigger, mode in (("d", "dictation"), ("c", "clean"), ("t", "task")):
-        machine = _machine()
+def test_the_dictate_chord_starts_a_dictation_recording() -> None:
+    machine = _machine()
 
-        assert _start(machine, trigger) == StartRecording(mode)
+    event = _start(machine, trigger="d")
+
+    assert event == StartRecording(dictation=True)
+    assert machine.phase is Phase.RECORDING
 
 
 def test_an_extra_modifier_does_not_match_the_binding() -> None:
@@ -134,7 +135,7 @@ def test_auto_repeat_starts_recording_exactly_once() -> None:
     events = [_start(machine)]
     events.extend(machine.key_down("space") for _ in range(5))
 
-    assert events[0] == StartRecording("context")
+    assert events[0] == StartRecording()
     assert all(isinstance(event, Ignore) for event in events[1:])
     assert machine.phase is Phase.RECORDING
 
@@ -143,15 +144,22 @@ def test_releasing_the_trigger_stops_recording() -> None:
     machine = _machine()
     _start(machine)
 
-    assert machine.key_up("space") == StopRecording("context")
+    assert machine.key_up("space") == StopRecording()
 
 
 def test_releasing_the_trigger_while_modifiers_are_held_stops_recording() -> None:
     machine = _machine()
     _start(machine)
 
-    assert machine.key_up("space") == StopRecording("context")
+    assert machine.key_up("space") == StopRecording()
     assert machine.held == frozenset({"ctrl", "alt"})
+
+
+def test_releasing_the_dictate_trigger_stops_a_dictation_recording() -> None:
+    machine = _machine()
+    _start(machine, trigger="d")
+
+    assert machine.key_up("d") == StopRecording(dictation=True)
 
 
 @pytest.mark.parametrize("order", [("ctrl", "alt"), ("alt", "ctrl")])
@@ -163,7 +171,7 @@ def test_modifiers_may_be_released_first_in_any_order(order: tuple[str, str]) ->
         assert isinstance(machine.key_up(modifier), Ignore)
         assert machine.phase is Phase.RECORDING
 
-    assert machine.key_up("space") == StopRecording("context")
+    assert machine.key_up("space") == StopRecording()
 
 
 def test_releasing_another_key_does_not_stop_recording() -> None:
@@ -172,18 +180,46 @@ def test_releasing_another_key_does_not_stop_recording() -> None:
 
     assert isinstance(machine.key_up("d"), Ignore)
     assert machine.phase is Phase.RECORDING
-    assert machine.key_up("space") == StopRecording("context")
+    assert machine.key_up("space") == StopRecording()
 
 
-def test_another_modes_chord_is_ignored_while_recording() -> None:
+def test_the_binding_cannot_overlap_itself_while_recording() -> None:
+    machine = _machine()
+    _start(machine)
+
+    assert isinstance(machine.key_down("space"), Ignore)
+    assert machine.phase is Phase.RECORDING
+
+
+def test_the_binding_cannot_overlap_itself_while_processing() -> None:
+    machine = _machine()
+    _start(machine)
+    machine.key_up("space")
+    machine.processing_started()
+
+    assert machine.phase is Phase.PROCESSING
+    assert isinstance(machine.key_down("space"), Ignore)
+
+
+def test_the_dictate_combo_cannot_start_while_recording() -> None:
     machine = _machine()
     _start(machine)
 
     assert isinstance(machine.key_down("d"), Ignore)
-    assert machine.active_mode == "context"
+    assert machine.phase is Phase.RECORDING
+    assert machine.key_up("space") == StopRecording()
 
 
-def test_another_modes_chord_is_ignored_while_processing() -> None:
+def test_the_record_combo_cannot_start_while_dictating() -> None:
+    machine = _machine()
+    _start(machine, trigger="d")
+
+    assert isinstance(machine.key_down("space"), Ignore)
+    assert machine.phase is Phase.RECORDING
+    assert machine.key_up("d") == StopRecording(dictation=True)
+
+
+def test_the_dictate_combo_cannot_start_while_processing() -> None:
     machine = _machine()
     _start(machine)
     machine.key_up("space")
@@ -191,6 +227,15 @@ def test_another_modes_chord_is_ignored_while_processing() -> None:
 
     assert machine.phase is Phase.PROCESSING
     assert isinstance(machine.key_down("d"), Ignore)
+
+
+def test_the_record_combo_cannot_start_while_processing_a_dictation() -> None:
+    machine = _machine()
+    _start(machine, trigger="d")
+    machine.key_up("d")
+    machine.processing_started()
+
+    assert machine.phase is Phase.PROCESSING
     assert isinstance(machine.key_down("space"), Ignore)
 
 
@@ -198,9 +243,16 @@ def test_escape_cancels_an_in_flight_recording() -> None:
     machine = _machine()
     _start(machine)
 
-    assert machine.key_down("esc") == CancelRecording("context")
+    assert machine.key_down("esc") == CancelRecording()
     assert machine.phase is Phase.IDLE
-    assert machine.active_mode is None
+
+
+def test_escape_cancels_an_in_flight_dictation_recording() -> None:
+    machine = _machine()
+    _start(machine, trigger="d")
+
+    assert machine.key_down("esc") == CancelRecording(dictation=True)
+    assert machine.phase is Phase.IDLE
 
 
 def test_escape_is_ignored_while_idle() -> None:
@@ -229,7 +281,7 @@ def test_a_cancelled_recording_does_not_restart_from_auto_repeat() -> None:
     assert machine.phase is Phase.IDLE
 
     assert isinstance(machine.key_up("space"), Ignore)
-    assert machine.key_down("space") == StartRecording("context")
+    assert machine.key_down("space") == StartRecording()
 
 
 def test_the_cancel_key_is_optional() -> None:
@@ -269,16 +321,14 @@ def test_a_full_cycle_can_be_repeated() -> None:
     machine = _machine()
 
     for _ in range(3):
-        assert _start(machine) == StartRecording("context")
-        assert machine.key_up("space") == StopRecording("context")
+        assert _start(machine) == StartRecording()
+        assert machine.key_up("space") == StopRecording()
         machine.processing_started()
         assert _phase(machine) is Phase.PROCESSING
         machine.processing_finished()
         assert _phase(machine) is Phase.IDLE
         machine.key_up("ctrl")
         machine.key_up("alt")
-
-    assert machine.active_mode is None
 
 
 def test_processing_finished_recovers_from_any_phase() -> None:
@@ -288,7 +338,6 @@ def test_processing_finished_recovers_from_any_phase() -> None:
     machine.processing_finished()
 
     assert machine.phase is Phase.IDLE
-    assert machine.active_mode is None
 
 
 def test_reset_clears_the_held_modifiers_and_the_active_recording() -> None:
@@ -298,7 +347,6 @@ def test_reset_clears_the_held_modifiers_and_the_active_recording() -> None:
     machine.reset()
 
     assert machine.phase is Phase.IDLE
-    assert machine.active_mode is None
     assert machine.held == frozenset()
     assert isinstance(machine.key_down("space"), Ignore)
 
@@ -320,8 +368,8 @@ def test_a_trigger_pressed_during_processing_cannot_auto_start_the_next_recordin
     the tail of what the user is saying.
     """
     machine = _machine()
-    assert _start(machine) == StartRecording("context")
-    assert machine.key_up("space") == StopRecording("context")
+    assert _start(machine) == StartRecording()
+    assert machine.key_up("space") == StopRecording()
     machine.processing_started()
 
     assert isinstance(machine.key_down("space"), Ignore)
@@ -331,4 +379,21 @@ def test_a_trigger_pressed_during_processing_cannot_auto_start_the_next_recordin
     assert isinstance(machine.key_down("space"), Ignore)
 
     machine.key_up("space")
-    assert machine.key_down("space") == StartRecording("context")
+    assert machine.key_down("space") == StartRecording()
+
+
+def test_the_other_trigger_pressed_during_processing_cannot_auto_start_the_next_recording() -> None:
+    """The auto-repeat guard covers both triggers, not just the one that is recording."""
+    machine = _machine()
+    assert _start(machine) == StartRecording()
+    assert machine.key_up("space") == StopRecording()
+    machine.processing_started()
+
+    assert isinstance(machine.key_down("d"), Ignore)
+    assert isinstance(machine.key_down("d"), Ignore)
+    machine.processing_finished()
+
+    assert isinstance(machine.key_down("d"), Ignore)
+
+    machine.key_up("d")
+    assert machine.key_down("d") == StartRecording(dictation=True)

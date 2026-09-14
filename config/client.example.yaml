@@ -21,16 +21,16 @@ audio:
   sample_rate: null
   channels: 1
 
-# Push-to-talk bindings: hold the combo to record, release the trigger key to send.
-# Each binding maps a mode name (a file in modes/) to "mod+mod+key". Modifiers: ctrl, alt, shift,
-# win. The modifier set must match exactly, so ctrl+alt+space does not fire for ctrl+alt+shift+space.
+# Push-to-talk: hold a combo to capture, release the trigger key to send.
+# `record` formalises what you said into an engineering task; `dictate` only punctuates it and
+# drops filler words, changing nothing else - that is the one to use for notes, messages and
+# commit descriptions. The two must differ.
+# A combo is "mod+mod+key"; modifiers are ctrl, alt, shift, win. The modifier set must match
+# exactly, so ctrl+alt+space does not fire for ctrl+alt+shift+space.
 # cancel is pressed alone while recording: it drops the audio and sends nothing.
 hotkeys:
-  bindings:
-    context: "ctrl+alt+space"
-    dictation: "ctrl+alt+d"
-    clean: "ctrl+alt+c"
-    task: "ctrl+alt+t"
+  record: "ctrl+alt+space"
+  dictate: "ctrl+alt+d"
   cancel: "esc"
 
 # Delivery into the focused window. With enabled: false the result is only copied to the clipboard.
@@ -70,8 +70,8 @@ project:
   max_bytes: 8000
 
 # level: DEBUG, INFO, WARNING, ERROR.
-# At INFO the companion logs one provenance line per recording: the mode, the project it
-# resolved, the .vox.md it read, how many bytes of it were sent, whether they were truncated,
+# At INFO the companion logs one provenance line per recording: the project it resolved,
+# the .vox.md it read, how many bytes of it were sent, whether they were truncated,
 # why nothing was sent when nothing was (project_status), and the target window handle. The
 # window TITLE is logged only at DEBUG, because it usually names the file you had open.
 # log_text: true also writes transcripts and generated prompts to the log at DEBUG. Off by default.

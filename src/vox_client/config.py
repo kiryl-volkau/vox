@@ -51,20 +51,15 @@ class AudioConfig:
     channels: int = 1
 
 
-def _default_bindings() -> dict[str, str]:
-    return {
-        "context": "ctrl+alt+space",
-        "dictation": "ctrl+alt+d",
-        "clean": "ctrl+alt+c",
-        "task": "ctrl+alt+t",
-    }
-
-
 @dataclass(frozen=True, slots=True)
 class HotkeyConfig:
-    """Push-to-talk bindings as mode name -> combo string, plus the cancel combo."""
+    """The two push-to-talk combos, plus the combo that aborts a recording.
 
-    bindings: dict[str, str] = field(default_factory=_default_bindings)
+    ``record`` formalises what was said into a task; ``dictate`` only punctuates it.
+    """
+
+    record: str = "ctrl+alt+space"
+    dictate: str = "ctrl+alt+d"
     cancel: str = "esc"
 
 
@@ -298,39 +293,19 @@ def _check_trigger(where: str, key: str) -> None:
 
 
 def _hotkeys(data: Mapping[str, Any], default: HotkeyConfig) -> HotkeyConfig:
-    raw = data.get("bindings")
-    if raw is None:
-        bindings = dict(default.bindings)
-    elif isinstance(raw, dict):
-        bindings = {}
-        for mode, combo in raw.items():
-            if not isinstance(mode, str) or not mode.strip():
-                raise ConfigError("hotkeys.bindings: every mode name must be a non-empty string")
-            if not isinstance(combo, str):
-                raise ConfigError(
-                    f"hotkeys.bindings.{mode}: expected a string, got {_type_name(combo)}"
-                )
-            bindings[mode.strip()] = combo
-    else:
-        raise ConfigError(f"hotkeys.bindings: expected a mapping, got {_type_name(raw)}")
-
-    if not bindings:
-        raise ConfigError("hotkeys.bindings: at least one mode must be bound")
-    for mode, combo in bindings.items():
-        try:
-            parsed = Hotkey.parse(combo)
-        except ValueError as exc:
-            raise ConfigError(f"hotkeys.bindings.{mode}: {exc}") from exc
-        _check_trigger(f"hotkeys.bindings.{mode}", parsed.key)
-
+    record = _read_str(data, "hotkeys", "record", default.record)
+    dictate = _read_str(data, "hotkeys", "dictate", default.dictate)
     cancel = _read_str(data, "hotkeys", "cancel", default.cancel)
-    try:
-        parsed_cancel = Hotkey.parse(cancel)
-    except ValueError as exc:
-        raise ConfigError(f"hotkeys.cancel: {exc}") from exc
-    _check_trigger("hotkeys.cancel", parsed_cancel.key)
-
-    return HotkeyConfig(bindings=bindings, cancel=cancel)
+    parsed: dict[str, Hotkey] = {}
+    for key, combo in (("record", record), ("dictate", dictate), ("cancel", cancel)):
+        try:
+            parsed[key] = Hotkey.parse(combo)
+        except ValueError as exc:
+            raise ConfigError(f"hotkeys.{key}: {exc}") from exc
+        _check_trigger(f"hotkeys.{key}", parsed[key].key)
+    if parsed["record"] == parsed["dictate"]:
+        raise ConfigError("hotkeys.dictate: must differ from hotkeys.record, or it never fires")
+    return HotkeyConfig(record=record, dictate=dictate, cancel=cancel)
 
 
 def _paste(data: Mapping[str, Any], default: PasteConfig) -> PasteConfig:

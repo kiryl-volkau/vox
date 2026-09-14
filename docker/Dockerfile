@@ -24,7 +24,7 @@ RUN uv sync --locked --no-dev --extra server --no-install-project
 
 COPY README.md ./
 COPY src ./src
-COPY modes ./modes
+COPY prompt.md dictation.md ./
 COPY config ./config
 RUN uv sync --locked --no-dev --extra server
 

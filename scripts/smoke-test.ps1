@@ -3,18 +3,17 @@
     Verifies that a running vox backend is healthy end to end.
 
 .DESCRIPTION
-    Runs eight checks against the backend and prints PASS, FAIL or SKIP for each:
+    Runs seven checks against the backend and prints PASS, FAIL or SKIP for each:
 
       a) GET /health is reachable
       b) /health reports status "ready"
       c) stt.ready is true (warns loudly when the model landed on the CPU)
       d) gpu.cuda_available is true
-      e) GET /v1/modes returns context, dictation, clean and task
-      f) llm.ready is true (skipped with -SkipLlm)
-      g) POST /v1/process without audio is rejected with HTTP 400 or 422
-      h) POST /v1/process with a generated WAV runs the whole pipeline
+      e) llm.ready is true (skipped with -SkipLlm)
+      f) POST /v1/process without audio is rejected with HTTP 400 or 422
+      g) POST /v1/process with a generated WAV runs the whole pipeline
 
-    The WAV fixture for check (h) is built in-script: two seconds of quiet 440 Hz
+    The WAV fixture for check (g) is built in-script: two seconds of quiet 440 Hz
     tone, 16 kHz mono 16-bit PCM. A tone contains no speech, so both HTTP 200 with
     a non-empty output and HTTP 422 empty_transcript count as a pass - either way
     the audio reached Whisper and came back through the API.
@@ -25,7 +24,7 @@
     Backend base URL. Default http://127.0.0.1:8765
 
 .PARAMETER SkipLlm
-    Skip the LLM readiness check, for a dictation-only setup with no model server.
+    Skip the LLM readiness check, for a transcription-only setup with no model server.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File scripts\smoke-test.ps1
@@ -239,12 +238,12 @@ function New-MultipartBody {
 function Invoke-ProcessRequest {
     param(
         [Parameter(Mandatory = $true)][string]$Uri,
-        [string]$Mode = "dictation",
         [string]$WavPath = ""
     )
 
+    # client_id is sent so the no-audio check still posts a non-empty multipart body.
     if ($PSVersionTable.PSVersion.Major -ge 6) {
-        $form = @{ mode = $Mode }
+        $form = @{ client_id = "vox-smoke-test" }
         if ($WavPath -ne "") {
             $form["audio"] = Get-Item -LiteralPath $WavPath
         }
@@ -252,7 +251,7 @@ function Invoke-ProcessRequest {
     }
 
     $boundary = [Guid]::NewGuid().ToString("N")
-    $body = New-MultipartBody -Boundary $boundary -Fields @{ mode = $Mode } -FilePath $WavPath
+    $body = New-MultipartBody -Boundary $boundary -Fields @{ client_id = "vox-smoke-test" } -FilePath $WavPath
     return Invoke-Http -Uri $Uri -Method "Post" -BodyBytes $body -ContentType "multipart/form-data; boundary=$boundary"
 }
 
@@ -314,54 +313,28 @@ if ($null -eq $health) {
     }
 }
 
-$expectedModes = @("clean", "context", "dictation", "task")
-$modesResponse = Invoke-Http -Uri "$BaseUrl/v1/modes" -Method "Get" -TimeoutSec 15
-if ($modesResponse.StatusCode -ne 200) {
-    $detail = "no HTTP response"
-    if ($modesResponse.StatusCode -ne 0) {
-        $detail = "HTTP $($modesResponse.StatusCode)"
-    }
-    Write-Result -Name "e) GET /v1/modes" -Status "FAIL" -Detail $detail
-} else {
-    $modesPayload = ConvertFrom-ResponseJson -Content $modesResponse.Content
-    $modeNames = @()
-    if ($null -ne $modesPayload -and $null -ne $modesPayload.modes) {
-        $modeNames = @($modesPayload.modes | ForEach-Object { "$($_.name)" })
-    }
-    $missing = @($expectedModes | Where-Object { $modeNames -notcontains $_ })
-    if ($missing.Count -eq 0) {
-        Write-Result -Name "e) GET /v1/modes" -Status "PASS" -Detail ("{0} modes: {1}" -f $modeNames.Count, (($modeNames | Sort-Object) -join ", "))
-        $extra = @($modeNames | Where-Object { $expectedModes -notcontains $_ })
-        if ($extra.Count -gt 0) {
-            Write-Note ("extra modes present: {0}" -f ($extra -join ", "))
-        }
-    } else {
-        Write-Result -Name "e) GET /v1/modes" -Status "FAIL" -Detail ("missing: {0}; got: {1}" -f ($missing -join ", "), (($modeNames | Sort-Object) -join ", "))
-    }
-}
-
 if ($SkipLlm) {
-    Write-Result -Name "f) LLM ready" -Status "SKIP" -Detail "-SkipLlm was passed"
+    Write-Result -Name "e) LLM ready" -Status "SKIP" -Detail "-SkipLlm was passed"
 } elseif ($null -eq $health) {
-    Write-Result -Name "f) LLM ready" -Status "FAIL" -Detail "no health payload"
+    Write-Result -Name "e) LLM ready" -Status "FAIL" -Detail "no health payload"
 } elseif ($health.llm.ready -eq $true) {
-    Write-Result -Name "f) LLM ready" -Status "PASS" -Detail "model=$($health.llm.model) base_url=$($health.llm.base_url)"
+    Write-Result -Name "e) LLM ready" -Status "PASS" -Detail "model=$($health.llm.model) base_url=$($health.llm.base_url)"
 } else {
-    Write-Result -Name "f) LLM ready" -Status "FAIL" -Detail "base_url=$($health.llm.base_url) error=$($health.llm.error)"
+    Write-Result -Name "e) LLM ready" -Status "FAIL" -Detail "base_url=$($health.llm.base_url) error=$($health.llm.error)"
     Write-Note "Start your model server (for example 'ollama serve' plus 'ollama pull qwen2.5:7b-instruct') or correct LLM_BASE_URL in .env."
 }
 
 $processUri = "$BaseUrl/v1/process"
 
-$noAudioResponse = Invoke-ProcessRequest -Uri $processUri -Mode "dictation"
+$noAudioResponse = Invoke-ProcessRequest -Uri $processUri
 if ($noAudioResponse.StatusCode -eq 422 -or $noAudioResponse.StatusCode -eq 400) {
-    Write-Result -Name "g) POST /v1/process without audio is rejected" -Status "PASS" -Detail "HTTP $($noAudioResponse.StatusCode)"
+    Write-Result -Name "f) POST /v1/process without audio is rejected" -Status "PASS" -Detail "HTTP $($noAudioResponse.StatusCode)"
 } else {
     $detail = "no HTTP response"
     if ($noAudioResponse.StatusCode -ne 0) {
         $detail = "HTTP $($noAudioResponse.StatusCode), expected 400 or 422"
     }
-    Write-Result -Name "g) POST /v1/process without audio is rejected" -Status "FAIL" -Detail $detail
+    Write-Result -Name "f) POST /v1/process without audio is rejected" -Status "FAIL" -Detail $detail
 }
 
 $wavPath = Join-Path $env:TEMP ("vox-smoke-{0}.wav" -f ([Guid]::NewGuid().ToString("N")))
@@ -370,7 +343,7 @@ try {
     $wavSize = (Get-Item -LiteralPath $wavPath).Length
     Write-Note "fixture: 2.0s of 440 Hz tone, 16 kHz mono 16-bit PCM, $wavSize bytes"
 
-    $audioResponse = Invoke-ProcessRequest -Uri $processUri -Mode "dictation" -WavPath $wavPath
+    $audioResponse = Invoke-ProcessRequest -Uri $processUri -WavPath $wavPath
     $payload = ConvertFrom-ResponseJson -Content $audioResponse.Content
 
     if ($audioResponse.StatusCode -eq 200) {
@@ -379,10 +352,10 @@ try {
             $output = "$($payload.output)"
         }
         if ($output.Trim() -ne "") {
-            Write-Result -Name "h) POST /v1/process with a WAV fixture" -Status "PASS" -Detail "HTTP 200 with a non-empty output - the full pipeline ran"
+            Write-Result -Name "g) POST /v1/process with a WAV fixture" -Status "PASS" -Detail "HTTP 200 with a non-empty output - the full pipeline ran"
             Write-Note "request_id=$($payload.request_id) timings_ms=$($payload.timings_ms.total)"
         } else {
-            Write-Result -Name "h) POST /v1/process with a WAV fixture" -Status "FAIL" -Detail "HTTP 200 but the output field is empty"
+            Write-Result -Name "g) POST /v1/process with a WAV fixture" -Status "FAIL" -Detail "HTTP 200 but the output field is empty"
         }
     } elseif ($audioResponse.StatusCode -eq 422) {
         $errorCode = ""
@@ -390,14 +363,14 @@ try {
             $errorCode = "$($payload.error)"
         }
         if ($errorCode -eq "empty_transcript") {
-            Write-Result -Name "h) POST /v1/process with a WAV fixture" -Status "PASS" -Detail "HTTP 422 empty_transcript - expected for a speechless tone; STT ran and the API answered"
+            Write-Result -Name "g) POST /v1/process with a WAV fixture" -Status "PASS" -Detail "HTTP 422 empty_transcript - expected for a speechless tone; STT ran and the API answered"
         } else {
-            Write-Result -Name "h) POST /v1/process with a WAV fixture" -Status "FAIL" -Detail "HTTP 422 error=$errorCode (expected empty_transcript)"
+            Write-Result -Name "g) POST /v1/process with a WAV fixture" -Status "FAIL" -Detail "HTTP 422 error=$errorCode (expected empty_transcript)"
         }
     } elseif ($SkipLlm -and $null -ne $payload -and "$($payload.error)" -like "llm_*") {
-        # Every mode sets requires_llm, so a fixture that Whisper did not hear as silence
-        # reaches the LLM step; with -SkipLlm that is a skipped stage, not a failure.
-        Write-Result -Name "h) POST /v1/process with a WAV fixture" -Status "PASS" -Detail "HTTP $($audioResponse.StatusCode) $($payload.error) - STT produced a transcript and -SkipLlm excuses the LLM stage"
+        # The pipeline always calls the LLM, so a fixture that Whisper did not hear as
+        # silence reaches that step; with -SkipLlm it is a skipped stage, not a failure.
+        Write-Result -Name "g) POST /v1/process with a WAV fixture" -Status "PASS" -Detail "HTTP $($audioResponse.StatusCode) $($payload.error) - STT produced a transcript and -SkipLlm excuses the LLM stage"
     } else {
         $detail = "no HTTP response"
         if ($audioResponse.StatusCode -ne 0) {
@@ -406,7 +379,7 @@ try {
                 $detail = "$detail error=$($payload.error)"
             }
         }
-        Write-Result -Name "h) POST /v1/process with a WAV fixture" -Status "FAIL" -Detail $detail
+        Write-Result -Name "g) POST /v1/process with a WAV fixture" -Status "FAIL" -Detail $detail
     }
 } finally {
     if (Test-Path -LiteralPath $wavPath) {

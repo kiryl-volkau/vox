@@ -227,7 +227,6 @@ function Show-Header {
     Write-Field "request" (Get-Prop $Trace "request_id")
     Write-Field "started" (Get-TraceTime $Trace $File)
     Write-Field "endpoint" (Get-Prop $Trace "endpoint")
-    Write-Field "mode" (Get-Prop $Trace "mode")
     $status = Format-Value (Get-Prop $Trace "status")
     if ($status -eq "error") {
         $failure = Get-Prop $Trace "error"
@@ -342,7 +341,6 @@ function Show-Output {
         Write-Info "nothing was produced"
         return
     }
-    Write-Field "wrapped" (Get-Prop $output "wrapped_for_claude")
     Write-Field "chars" (Get-Prop $output "chars")
     Write-TextField "text" (Get-Prop $output "text")
 }
@@ -429,7 +427,6 @@ if ($List) {
         $rows += [pscustomobject]@{
             Time      = (Get-TraceTime $entry.Trace $entry.File)
             RequestId = (Format-Value (Get-Prop $entry.Trace "request_id"))
-            Mode      = (Format-Value (Get-Prop $entry.Trace "mode"))
             Project   = (Format-Value (Get-Prop (Get-Prop $entry.Trace "project") "name"))
             Status    = (Format-Value (Get-Prop $entry.Trace "status"))
             TotalMs   = (Format-Value (Get-Prop (Get-Prop $entry.Trace "timings_ms") "total"))
