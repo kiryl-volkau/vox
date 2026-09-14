@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from vox_client import main as client_main
+import vox_client.main as client_main
 from vox_client.clipboard import ClipboardError
 from vox_client.config import default_config
 

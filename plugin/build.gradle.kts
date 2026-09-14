@@ -18,7 +18,12 @@ repositories {
 
 dependencies {
     intellijPlatform {
-        val localIde = providers.gradleProperty("platformLocalPath").orNull?.takeIf { file(it).isDirectory }
+        // isNotBlank first: an unset property is the empty string, and file("") is the project
+        // directory, which passes isDirectory and would point the compile classpath at itself.
+        val localIde =
+            providers.gradleProperty("platformLocalPath").orNull?.takeIf {
+                it.isNotBlank() && file(it).isDirectory
+            }
         if (localIde != null) {
             local(localIde)
         } else {

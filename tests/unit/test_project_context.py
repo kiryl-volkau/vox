@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from vox_client import main as client_main
+import vox_client.main as client_main
 from vox_client.config import default_config
 from vox_client.project import PROJECT_FILE_NAME, resolve_project
 

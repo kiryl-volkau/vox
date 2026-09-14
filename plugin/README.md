@@ -11,14 +11,14 @@ Built and tested against IntelliJ IDEA Ultimate 2026.2.2 (build IU-262.10315.125
 `java` on PATH is JDK 1.8 and is far too old for both Gradle and the IntelliJ Platform. The build
 must run on the JetBrains Runtime that ships with the IDE:
 
-- `C:\Users\skiri\.jdks\jbr-25.0.2`, or
-- `C:\Users\skiri\AppData\Local\Programs\IntelliJ IDEA Ultimate\jbr`
+- `C:\Users\<you>\.jdks\jbr-25.0.2`, or
+- `C:\Users\<you>\AppData\Local\Programs\IntelliJ IDEA Ultimate\jbr`
 
 PowerShell:
 
 ```powershell
 cd plugin
-$env:JAVA_HOME = "C:\Users\skiri\.jdks\jbr-25.0.2"
+$env:JAVA_HOME = "C:\Users\<you>\.jdks\jbr-25.0.2"
 .\gradlew.bat buildPlugin --no-daemon
 ```
 
@@ -26,7 +26,7 @@ Git Bash:
 
 ```bash
 cd plugin
-JAVA_HOME=/c/Users/skiri/.jdks/jbr-25.0.2 ./gradlew buildPlugin --no-daemon
+JAVA_HOME=/c/Users/<you>/.jdks/jbr-25.0.2 ./gradlew buildPlugin --no-daemon
 ```
 
 The artefact is `plugin/build/distributions/vox-idea-<version>.zip`.

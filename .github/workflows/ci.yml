@@ -1,0 +1,48 @@
+name: CI
+
+# Windows on purpose. The companion is a Windows program - it imports pynput, sounddevice and
+# ctypes.windll at module load - so its unit tests cannot even be collected on Linux, and a CI
+# that quietly skips half the suite is worse than no CI.
+#
+# The integration and eval suites are deliberately absent: both need a running backend with
+# CUDA and a live language model behind it, which no hosted runner has. A suite that cannot
+# pass on CI only teaches people to ignore a red build.
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: lint, types and unit tests
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # uv provides the interpreter rather than the runner, exactly as the Dockerfile does,
+      # so CI and the container agree on the version the project requires.
+      - name: Install Python
+        run: uv python install 3.14
+
+      - name: Install dependencies
+        run: uv sync --locked --extra server --extra client
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Types
+        run: uv run mypy src tests
+
+      - name: Unit tests
+        run: uv run pytest tests/unit

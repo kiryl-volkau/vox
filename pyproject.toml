@@ -3,6 +3,8 @@ name = "vox"
 version = "0.1.0"
 description = "Windows push-to-talk voice interface for Claude Code: GPU Whisper STT plus a local OpenAI-compatible LLM in Docker, native Windows hotkey/mic/paste companion."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.14"
 dependencies = []
 

@@ -42,14 +42,11 @@ models/
 # Diagnostic traces (VOX_TRACE_DIR): whole transcripts and prompts, never commit them
 /traces/
 
-# IDE
-.idea/workspace.xml
-.idea/shelf/
-.idea/httpRequests/
-.idea/tasks.xml
-.idea/usage.statistics.xml
-.idea/dictionaries/
-.idea/vox-transcripts.xml
+# IDE. The whole directory: every file in it that mattered carried a path to somebody's
+# machine - the Python SDK in misc.xml and the .iml, an AWS region in awsToolkit.xml - and
+# none of it is worth a merge conflict on a shared repository.
+.idea/
+*.iml
 .vscode/
 
 # OS

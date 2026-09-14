@@ -7,11 +7,10 @@ again. A moment later the cleaned-up text is sitting in the Claude Code prompt i
 terminal. **Enter is never pressed for you.** You read the text, edit it if you want, and submit it
 yourself.
 
-The project is called **vox**. The checkout directory may still be named `voice-code` - it was
-renamed in place and the folder name is cosmetic. Everything that has a name of its own is `vox`:
-the packages `vox_server` and `vox_client`, the console scripts `vox-server` and `vox-client`, the
-containers `vox-backend` and `vox-ollama`, and the compose project, which `compose.yaml` pins with
-`name: vox` so renaming the folder again cannot orphan the volumes.
+The project is called **vox**, and the checkout directory can be called anything: the packages
+`vox_server` and `vox_client`, the console scripts `vox-server` and `vox-client` and the containers
+`vox-backend` and `vox-ollama` all carry the name themselves, and `compose.yaml` pins the compose
+project with `name: vox` so renaming the folder cannot orphan the volumes.
 
 Three pieces:
 
@@ -304,7 +303,7 @@ stt ready: model=turbo device=cuda compute_type=float16
 
 ```powershell
 cd plugin
-$env:JAVA_HOME = "C:\Users\skiri\.jdks\jbr-25.0.2"
+$env:JAVA_HOME = "C:\Users\<you>\.jdks\jbr-25.0.2"
 .\gradlew.bat buildPlugin --no-daemon
 ```
 
@@ -389,17 +388,17 @@ must run on a JetBrains Runtime:
 
 ```powershell
 cd plugin
-$env:JAVA_HOME = "C:\Users\skiri\.jdks\jbr-25.0.2"
+$env:JAVA_HOME = "C:\Users\<you>\.jdks\jbr-25.0.2"
 .\gradlew.bat buildPlugin --no-daemon
 ```
 
 The JBR bundled with the IDE works just as well - point `JAVA_HOME` at
-`C:\Users\skiri\AppData\Local\Programs\IntelliJ IDEA Ultimate\jbr` instead. From Git Bash the same
+`C:\Users\<you>\AppData\Local\Programs\IntelliJ IDEA Ultimate\jbr` instead. From Git Bash the same
 build is:
 
 ```bash
 cd plugin
-JAVA_HOME=/c/Users/skiri/.jdks/jbr-25.0.2 ./gradlew buildPlugin --no-daemon
+JAVA_HOME=/c/Users/<you>/.jdks/jbr-25.0.2 ./gradlew buildPlugin --no-daemon
 ```
 
 The artefact is `plugin\build\distributions\vox-idea-0.1.0.zip`.
@@ -1531,3 +1530,27 @@ model load plus transcription on CUDA succeeded. Both versions are pinned exactl
 this is the pairing that was verified on this machine. Everything else in the dependency set (
 FastAPI, pydantic 2, httpx, numpy 2.5, sounddevice, pynput, pywin32, pystray, PyInstaller) already
 ships 3.14 wheels.
+
+---
+
+## Contributing and licence
+
+The suite CI runs is the one to run before opening a pull request, and it is three commands:
+
+```bash
+uv run ruff check .
+uv run mypy src tests
+uv run pytest tests/unit
+```
+
+The integration and evaluation suites are not part of it: both need a running backend with a GPU
+and a live language model, so they are opt-in (`-m integration`, `VOX_EVAL=1 -m eval`) and CI never
+sees them - see [Tests](#tests). Changing a prompt is the one case where running the evaluation
+locally matters, because nothing else will tell you that a rewording cost the output language.
+
+The plugin is a separate Gradle build under `plugin/`. It is built against the IDE installed on
+your machine, so set `platformLocalPath` in `~/.gradle/gradle.properties` rather than in the
+repository copy; left blank, Gradle downloads `platformVersion` from JetBrains instead.
+
+Licensed under the [MIT Licence](LICENSE).
+
