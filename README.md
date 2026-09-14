@@ -34,6 +34,9 @@ Copy-Item .env.example .env       # set LLM_BASE_URL and LLM_MODEL; every other 
 docker compose up -d --build
 ```
 
+The image is also published, if you would rather not build CUDA yourself:
+`docker pull ghcr.io/kiryl-volkau/vox-backend:latest`.
+
 The first start downloads the Whisper weights, so give it a couple of minutes. It is ready when
 the log says:
 
