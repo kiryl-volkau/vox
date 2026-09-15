@@ -255,9 +255,12 @@ and attaches it to the GitHub release, so nobody needs a JDK to install the plug
 ```bash
 # bump pluginVersion in plugin/gradle.properties first - the workflow fails if the tag
 # disagrees with it, rather than publishing a zip whose name contradicts its release
-git tag v0.2.0
-git push origin v0.2.0
+git tag plugin-v0.2.0
+git push origin plugin-v0.2.0
 ```
+
+The `plugin-` prefix releases only this: a plain `v0.2.0` tag would rebuild and push the backend
+image as well, which a plugin-only change has no reason to do. `backend-v*` is the other half.
 
 ## Publishing to JetBrains Marketplace
 
